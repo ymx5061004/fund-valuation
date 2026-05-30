@@ -1,5 +1,5 @@
 import type { Fund } from "./types";
-import { fetchAllFunds } from "./eastmoney";
+import { fetchPopularFunds } from "./eastmoney";
 import { getFunds as getMockFunds } from "./mock-data";
 
 export type DataSource = "live" | "mock";
@@ -10,7 +10,7 @@ export type DataSource = "live" | "mock";
  */
 export async function getDashboardFunds(): Promise<{ funds: Fund[]; source: DataSource }> {
   try {
-    const funds = await fetchAllFunds();
+    const funds = await fetchPopularFunds(8);
     if (funds.length > 0) return { funds, source: "live" };
   } catch {
     // 落到下面的兜底

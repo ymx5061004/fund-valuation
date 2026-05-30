@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { Fund, FundMeta, FundType, Prediction, Signal } from "@/lib/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Fund, FundMeta, FundType, Prediction, RankSort, Signal } from "@/lib/types";
 import { predict } from "@/lib/prediction";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
@@ -57,6 +57,14 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
   const [addedCodes, setAddedCodes] = useLocalStorage<string[]>("fv.added", []);
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+
+  // 热门榜维度（默认近1年；初始榜单已由服务端按此给出）
+  const [rankSort, setRankSort] = useState<RankSort>("1nzf");
+  const [rankLoading, setRankLoading] = useState(false);
+  const addedRef = useRef(addedCodes);
+  useEffect(() => {
+    addedRef.current = addedCodes;
+  }, [addedCodes]);
 
   // 模拟盘中实时刷新
   const [live, setLive] = useState(false);
@@ -155,6 +163,41 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
     setFunds((prev) => prev.filter((f) => f.code !== code));
     if (selectedCode === code) setSelectedCode(initialFunds[0]?.code ?? "");
   };
+
+  // 切换热门榜维度时，从 /api/popular 重新拉取并替换榜单（保留用户已添加的基金）
+  const firstRank = useRef(true);
+  useEffect(() => {
+    if (firstRank.current) {
+      firstRank.current = false; // 初始榜单用服务端数据，避免重复拉取
+      return;
+    }
+    let cancelled = false;
+    setRankLoading(true);
+    (async () => {
+      try {
+        const r = await fetch(`/api/popular?sort=${rankSort}&limit=8`);
+        if (!r.ok) return;
+        const j = (await r.json()) as { data: Fund[] };
+        if (cancelled || j.data.length === 0) return;
+        const popular = j.data;
+        const added = addedRef.current;
+        setFunds((prev) => {
+          const kept = prev.filter((f) => added.includes(f.code) && !popular.some((p) => p.code === f.code));
+          return [...popular, ...kept];
+        });
+        setSelectedCode((sc) =>
+          popular.some((p) => p.code === sc) || addedRef.current.includes(sc) ? sc : popular[0].code,
+        );
+      } catch {
+        // 忽略
+      } finally {
+        if (!cancelled) setRankLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rankSort]);
 
   const watchSet = useMemo(() => new Set(watch), [watch]);
   const toggleWatch = (code: string) =>
@@ -291,6 +334,22 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
 
       {/* 工具栏 + 列表 */}
       <section className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">热门基金榜</span>
+          <select
+            value={rankSort}
+            onChange={(e) => setRankSort(e.target.value as RankSort)}
+            className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700 outline-none focus:border-blue-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+          >
+            <option value="rzdf">今日涨幅</option>
+            <option value="1yzf">近1月</option>
+            <option value="3yzf">近3月</option>
+            <option value="1nzf">近1年</option>
+            <option value="jnzf">今年来</option>
+          </select>
+          {rankLoading && <span className="text-xs text-zinc-400">更新榜单中…</span>}
+          <span className="hidden text-xs text-zinc-400 sm:inline">按所选维度从天天基金排行榜实时获取</span>
+        </div>
         <FundToolbar
           query={query}
           onQuery={setQuery}

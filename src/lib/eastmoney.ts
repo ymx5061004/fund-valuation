@@ -4,7 +4,7 @@
 //    浏览器直接 fetch 会被拦或无法解析。
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
-import type { Fund, FundMeta, FundType, NavPoint } from "./types";
+import type { Fund, FundMeta, FundType, NavPoint, RankSort } from "./types";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -101,15 +101,31 @@ export async function fetchHistory(code: string, limit = 250): Promise<NavPoint[
   }
 }
 
-async function fetchFund(t: TrackedFund): Promise<Fund | null> {
-  const [est, history] = await Promise.all([fetchEstimate(t.code), fetchHistory(t.code)]);
-  if (history.length === 0) return null; // 没有历史净值就无法画图，视为失败
+interface BuildOpts {
+  /** true 时实时估值不走缓存（按代码即时取数用） */
+  fresh?: boolean;
+  name?: string;
+  type?: string;
+  manager?: string;
+}
+
+/** 按代码组装一只基金的完整数据（实时估值 + 历史净值 + 元信息）。
+ *  缺 type/manager 时才回源搜索接口补全。 */
+async function buildFund(code: string, opts: BuildOpts = {}): Promise<Fund | null> {
+  const needMeta = !opts.type || !opts.manager;
+  const [est, history, metas] = await Promise.all([
+    fetchEstimate(code, opts.fresh ?? false),
+    fetchHistory(code),
+    needMeta ? searchFunds(code) : Promise.resolve([] as FundMeta[]),
+  ]);
+  if (history.length === 0) return null; // 没有历史净值无法画图，视为失败
+  const meta = metas.find((m) => m.code === code) ?? metas[0];
   const lastNav = history[history.length - 1].nav;
   return {
-    code: t.code,
-    name: est?.name ?? t.code,
-    type: t.type,
-    manager: t.manager,
+    code,
+    name: est?.name ?? opts.name ?? meta?.name ?? code,
+    type: opts.type ?? meta?.type ?? "其他",
+    manager: opts.manager ?? meta?.manager ?? "—",
     nav: est?.nav ?? lastNav,
     estimateNav: est?.estimateNav ?? lastNav,
     estimateChangePct: est?.estimateChangePct ?? 0,
@@ -117,10 +133,44 @@ async function fetchFund(t: TrackedFund): Promise<Fund | null> {
   };
 }
 
-/** 拉取全部跟踪基金的真实数据（失败的基金会被过滤掉）。 */
-export async function fetchAllFunds(): Promise<Fund[]> {
-  const results = await Promise.all(TRACKED_FUNDS.map((t) => fetchFund(t)));
-  return results.filter((f): f is Fund => f !== null);
+// 排行榜接口失败时的兜底代码（仍是真实基金，只是不依赖排行榜）
+const RANK_FALLBACK: { code: string; name: string; type?: string; manager?: string }[] = TRACKED_FUNDS.map(
+  (t) => ({ code: t.code, name: "", type: t.type, manager: t.manager }),
+);
+
+/** 从天天基金排行榜取 top N（仅 code + name）。 */
+async function fetchRanking(limit: number, sort: RankSort): Promise<{ code: string; name: string }[]> {
+  try {
+    const url = `https://fund.eastmoney.com/data/rankhandler.aspx?op=ph&dt=kf&ft=all&rs=&gs=0&sc=${sort}&st=desc&pi=1&pn=${limit}&dx=1`;
+    const res = await fetch(url, {
+      headers: { ...HEADERS, Referer: "https://fund.eastmoney.com/data/fundranking.html" },
+      next: { revalidate: 1800 },
+    });
+    if (!res.ok) return [];
+    const text = await res.text();
+    const m = text.match(/datas:\[([\s\S]*?)\]/);
+    if (!m) return [];
+    const rows = m[1].match(/"([^"]*)"/g) ?? [];
+    return rows
+      .map((s) => {
+        const parts = s.replace(/"/g, "").split(",");
+        return { code: parts[0], name: parts[1] ?? "" };
+      })
+      .filter((x) => /^\d{6}$/.test(x.code));
+  } catch {
+    return [];
+  }
+}
+
+/** 拉取热门榜基金的完整数据（默认按近1年涨幅）。排行榜失败时回退到内置代码。 */
+export async function fetchPopularFunds(limit = 8, sort: RankSort = "1nzf"): Promise<Fund[]> {
+  const ranked = await fetchRanking(limit, sort);
+  const entries: { code: string; name: string; type?: string; manager?: string }[] =
+    ranked.length > 0 ? ranked : RANK_FALLBACK.slice(0, limit);
+  const funds = await Promise.all(
+    entries.map((e) => buildFund(e.code, { name: e.name, type: e.type, manager: e.manager })),
+  );
+  return funds.filter((f): f is Fund => f !== null);
 }
 
 // ---- 基金搜索 + 按代码取数（支持任意基金） ----
@@ -133,10 +183,12 @@ interface SearchItem {
 }
 
 /** 搜索基金（按代码或名称），返回简化的元信息列表。 */
-export async function searchFunds(key: string): Promise<FundMeta[]> {
+export async function searchFunds(key: string, fresh = false): Promise<FundMeta[]> {
   try {
     const url = `https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx?m=1&key=${encodeURIComponent(key)}`;
-    const res = await fetch(url, { headers: HEADERS, cache: "no-store" });
+    const res = fresh
+      ? await fetch(url, { headers: HEADERS, cache: "no-store" })
+      : await fetch(url, { headers: HEADERS, next: { revalidate: 3600 } });
     if (!res.ok) return [];
     const json = JSON.parse(await res.text()) as { Datas?: SearchItem[] };
     return (json.Datas ?? [])
@@ -154,24 +206,7 @@ export async function searchFunds(key: string): Promise<FundMeta[]> {
   }
 }
 
-/** 按代码取单只基金的完整数据（实时估值 + 历史净值 + 元信息）。 */
+/** 按代码取单只基金的完整数据（搜索添加用，取实时估值）。 */
 export async function fetchFundFull(code: string): Promise<Fund | null> {
-  const [est, history, metas] = await Promise.all([
-    fetchEstimate(code, true),
-    fetchHistory(code),
-    searchFunds(code),
-  ]);
-  if (history.length === 0) return null;
-  const meta = metas.find((m) => m.code === code) ?? metas[0];
-  const lastNav = history[history.length - 1].nav;
-  return {
-    code,
-    name: est?.name ?? meta?.name ?? code,
-    type: meta?.type ?? "其他",
-    manager: meta?.manager ?? "—",
-    nav: est?.nav ?? lastNav,
-    estimateNav: est?.estimateNav ?? lastNav,
-    estimateChangePct: est?.estimateChangePct ?? 0,
-    navHistory: history,
-  };
+  return buildFund(code, { fresh: true });
 }

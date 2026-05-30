@@ -5,6 +5,6 @@ import { searchFunds } from "@/lib/eastmoney";
 export async function GET(request: Request) {
   const key = (new URL(request.url).searchParams.get("key") ?? "").trim();
   if (!key) return NextResponse.json({ data: [] });
-  const data = await searchFunds(key);
+  const data = await searchFunds(key, true);
   return NextResponse.json({ data });
 }

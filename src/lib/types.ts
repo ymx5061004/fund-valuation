@@ -3,6 +3,9 @@
 // 常见类型给出字面量提示，同时允许接口返回的任意类型字符串（如“指数型-股票”取“指数型”）
 export type FundType = "股票型" | "混合型" | "债券型" | "指数型" | "QDII" | (string & {});
 
+/** 排行榜排序维度：今日涨幅 / 近1月 / 近3月 / 近1年 / 今年来 */
+export type RankSort = "rzdf" | "1yzf" | "3yzf" | "1nzf" | "jnzf";
+
 /** 基金检索结果的元信息（来自搜索接口） */
 export interface FundMeta {
   code: string;
