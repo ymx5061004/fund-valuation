@@ -15,6 +15,15 @@ import { HoldingsCalculator } from "@/components/holdings-calculator";
 
 const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
+interface EstimateDTO {
+  code: string;
+  name: string;
+  nav: number;
+  estimateNav: number;
+  estimateChangePct: number;
+  gztime: string;
+}
+
 function Stat({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
     <Card>
@@ -28,9 +37,10 @@ function Stat({ label, value, valueClass }: { label: string; value: string; valu
   );
 }
 
-export function FundDashboard({ funds: initialFunds }: { funds: Fund[] }) {
+export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; source: "live" | "mock" }) {
   const [funds, setFunds] = useState(initialFunds);
   const [selectedCode, setSelectedCode] = useState(initialFunds[0]?.code ?? "");
+  const codesParam = useMemo(() => initialFunds.map((f) => f.code).join(","), [initialFunds]);
 
   // 列表筛选/排序状态
   const [query, setQuery] = useState("");
@@ -46,22 +56,37 @@ export function FundDashboard({ funds: initialFunds }: { funds: Fund[] }) {
   const [live, setLive] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
+  // 开启后每 15s 轮询 /api/estimate 拉取真实盘中估值。
+  // 非交易时段估值不变属正常；只更新估值字段，navHistory 引用不变，图表不重绘。
   useEffect(() => {
     if (!live) return;
-    const id = setInterval(() => {
-      setFunds((prev) =>
-        prev.map((f) => {
-          const drift = (Math.random() - 0.5) * 0.004; // 每次 ±0.2% 抖动
-          const estimateNav = Number(Math.max(0.2, f.estimateNav * (1 + drift)).toFixed(4));
-          const estimateChangePct = Number((((estimateNav - f.nav) / f.nav) * 100).toFixed(2));
-          return { ...f, estimateNav, estimateChangePct }; // navHistory 引用保持不变，图表不会重绘
-        }),
-      );
-      const d = new Date();
-      setUpdatedAt(`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
-    }, 2500);
-    return () => clearInterval(id);
-  }, [live]);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/estimate?codes=${codesParam}`);
+        if (!res.ok) return;
+        const json = (await res.json()) as { data: EstimateDTO[]; updatedAt: string };
+        if (cancelled) return;
+        const map = new Map(json.data.map((e) => [e.code, e]));
+        setFunds((prev) =>
+          prev.map((f) => {
+            const e = map.get(f.code);
+            return e ? { ...f, nav: e.nav, estimateNav: e.estimateNav, estimateChangePct: e.estimateChangePct } : f;
+          }),
+        );
+        const d = new Date(json.updatedAt);
+        setUpdatedAt(`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
+      } catch {
+        // 网络异常时静默跳过本次
+      }
+    };
+    void poll();
+    const id = setInterval(poll, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [live, codesParam]);
 
   const watchSet = useMemo(() => new Set(watch), [watch]);
   const toggleWatch = (code: string) =>
@@ -126,8 +151,20 @@ export function FundDashboard({ funds: initialFunds }: { funds: Fund[] }) {
       {/* 标题 + 实时刷新开关 */}
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
-          <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 sm:text-2xl">基金估值与涨跌预测</h1>
-          <p className="text-sm text-zinc-500">盘中实时估值 · 技术指标方向研判 · 手机/电脑自适应（演示数据）</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 sm:text-2xl">基金估值与涨跌预测</h1>
+            {source === "live" ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950/60 dark:text-green-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                实时数据
+              </span>
+            ) : (
+              <span className="rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-500">
+                演示数据
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-zinc-500">数据来自天天基金 · 技术指标方向研判 · 手机/电脑自适应</p>
         </div>
         <button
           type="button"
@@ -140,7 +177,7 @@ export function FundDashboard({ funds: initialFunds }: { funds: Fund[] }) {
           )}
         >
           <span className={cn("h-2 w-2 rounded-full", live ? "animate-pulse bg-red-500" : "bg-zinc-400")} />
-          {live ? `实时中 · ${updatedAt ?? "--:--:--"}` : "模拟实时刷新"}
+          {live ? `实时中 · ${updatedAt ?? "--:--:--"}` : "实时估值刷新"}
         </button>
       </header>
 

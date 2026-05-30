@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { getFunds } from "@/lib/mock-data";
+import { getDashboardFunds } from "@/lib/data";
 
-// 基金数据接口。当前返回演示假数据；接入真实数据源时改写这里即可，
-// 前端可改为从 /api/funds 拉取（目前页面直接在服务端调用 getFunds）。
-export function GET() {
-  return NextResponse.json({ data: getFunds(), updatedAt: new Date().toISOString() });
+// 全量基金数据接口：真实数据优先，失败回退演示数据。
+export async function GET() {
+  const { funds, source } = await getDashboardFunds();
+  return NextResponse.json({ source, data: funds, updatedAt: new Date().toISOString() });
 }
