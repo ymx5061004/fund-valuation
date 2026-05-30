@@ -4,7 +4,7 @@
 //    浏览器直接 fetch 会被拦或无法解析。
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
-import type { Fund, FundType, NavPoint } from "./types";
+import type { Fund, FundMeta, FundType, NavPoint } from "./types";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -121,4 +121,57 @@ async function fetchFund(t: TrackedFund): Promise<Fund | null> {
 export async function fetchAllFunds(): Promise<Fund[]> {
   const results = await Promise.all(TRACKED_FUNDS.map((t) => fetchFund(t)));
   return results.filter((f): f is Fund => f !== null);
+}
+
+// ---- 基金搜索 + 按代码取数（支持任意基金） ----
+
+interface SearchItem {
+  CODE: string;
+  NAME: string;
+  CATEGORY: number;
+  FundBaseInfo?: { FTYPE?: string; JJJL?: string; JJGS?: string };
+}
+
+/** 搜索基金（按代码或名称），返回简化的元信息列表。 */
+export async function searchFunds(key: string): Promise<FundMeta[]> {
+  try {
+    const url = `https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx?m=1&key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, { headers: HEADERS, cache: "no-store" });
+    if (!res.ok) return [];
+    const json = JSON.parse(await res.text()) as { Datas?: SearchItem[] };
+    return (json.Datas ?? [])
+      .filter((d) => d.CATEGORY === 700 && d.FundBaseInfo) // 只保留基金
+      .slice(0, 12)
+      .map((d) => ({
+        code: d.CODE,
+        name: d.NAME,
+        type: (d.FundBaseInfo?.FTYPE ?? "").split("-")[0] || "其他",
+        manager: d.FundBaseInfo?.JJJL || "—",
+        company: d.FundBaseInfo?.JJGS ?? "",
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** 按代码取单只基金的完整数据（实时估值 + 历史净值 + 元信息）。 */
+export async function fetchFundFull(code: string): Promise<Fund | null> {
+  const [est, history, metas] = await Promise.all([
+    fetchEstimate(code, true),
+    fetchHistory(code),
+    searchFunds(code),
+  ]);
+  if (history.length === 0) return null;
+  const meta = metas.find((m) => m.code === code) ?? metas[0];
+  const lastNav = history[history.length - 1].nav;
+  return {
+    code,
+    name: est?.name ?? meta?.name ?? code,
+    type: meta?.type ?? "其他",
+    manager: meta?.manager ?? "—",
+    nav: est?.nav ?? lastNav,
+    estimateNav: est?.estimateNav ?? lastNav,
+    estimateChangePct: est?.estimateChangePct ?? 0,
+    navHistory: history,
+  };
 }

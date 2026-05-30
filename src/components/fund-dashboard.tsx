@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Fund, FundType, Prediction, Signal } from "@/lib/types";
+import type { Fund, FundMeta, FundType, Prediction, Signal } from "@/lib/types";
 import { predict } from "@/lib/prediction";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
@@ -12,6 +12,7 @@ import { FundToolbar, type SortKey } from "@/components/fund-toolbar";
 import { NavChart } from "@/components/nav-chart";
 import { PredictionPanel } from "@/components/prediction-panel";
 import { HoldingsCalculator } from "@/components/holdings-calculator";
+import { FundSearch } from "@/components/fund-search";
 
 const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
@@ -40,7 +41,7 @@ function Stat({ label, value, valueClass }: { label: string; value: string; valu
 export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; source: "live" | "mock" }) {
   const [funds, setFunds] = useState(initialFunds);
   const [selectedCode, setSelectedCode] = useState(initialFunds[0]?.code ?? "");
-  const codesParam = useMemo(() => initialFunds.map((f) => f.code).join(","), [initialFunds]);
+  const codesParam = useMemo(() => funds.map((f) => f.code).join(","), [funds]);
 
   // 列表筛选/排序状态
   const [query, setQuery] = useState("");
@@ -51,6 +52,11 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
   // 持久化：自选 & 持仓份额
   const [watch, setWatch] = useLocalStorage<string[]>("fv.watchlist", []);
   const [holdings, setHoldings] = useLocalStorage<Record<string, number>>("fv.holdings", {});
+
+  // 用户搜索添加的基金：持久化代码，挂载后按需拉取完整数据
+  const [addedCodes, setAddedCodes] = useLocalStorage<string[]>("fv.added", []);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   // 模拟盘中实时刷新
   const [live, setLive] = useState(false);
@@ -87,6 +93,68 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
       clearInterval(id);
     };
   }, [live, codesParam]);
+
+  // 拉取已添加但尚未加载的基金完整数据
+  useEffect(() => {
+    const missing = addedCodes.filter((c) => !funds.some((f) => f.code === c));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const fetched = await Promise.all(
+        missing.map(async (c) => {
+          try {
+            const r = await fetch(`/api/fund?code=${c}`);
+            if (!r.ok) return null;
+            const j = (await r.json()) as { data: Fund | null };
+            return j.data;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled) return;
+      const valid = fetched.filter((f): f is Fund => f !== null);
+      if (valid.length > 0) {
+        setFunds((prev) => [...prev, ...valid.filter((v) => !prev.some((p) => p.code === v.code))]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // 仅依赖 addedCodes；funds 用于去重，故意不入依赖以免循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addedCodes]);
+
+  const handleAdd = async (meta: FundMeta) => {
+    setAddError(null);
+    if (funds.some((f) => f.code === meta.code)) {
+      setSelectedCode(meta.code);
+      return;
+    }
+    setAdding(true);
+    try {
+      const r = await fetch(`/api/fund?code=${meta.code}`);
+      const j = (await r.json()) as { data: Fund | null };
+      if (r.ok && j.data) {
+        const fund = j.data;
+        setFunds((prev) => (prev.some((p) => p.code === fund.code) ? prev : [...prev, fund]));
+        setSelectedCode(fund.code);
+        setAddedCodes((prev) => (prev.includes(fund.code) ? prev : [...prev, fund.code]));
+      } else {
+        setAddError(`「${meta.name}」暂时无法获取数据`);
+      }
+    } catch {
+      setAddError("添加失败，请重试");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleRemove = (code: string) => {
+    setAddedCodes((prev) => prev.filter((c) => c !== code));
+    setFunds((prev) => prev.filter((f) => f.code !== code));
+    if (selectedCode === code) setSelectedCode(initialFunds[0]?.code ?? "");
+  };
 
   const watchSet = useMemo(() => new Set(watch), [watch]);
   const toggleWatch = (code: string) =>
@@ -187,6 +255,38 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
         <Stat label="看涨" value={`${stats.bull}`} valueClass="text-red-600 dark:text-red-500" />
         <Stat label="看跌" value={`${stats.bear}`} valueClass="text-green-600 dark:text-green-500" />
         <Stat label="平均估值涨跌" value={formatPct(stats.avg)} valueClass={changeColor(stats.avg)} />
+      </section>
+
+      {/* 搜索任意基金 */}
+      <section className="space-y-2">
+        <FundSearch onAdd={handleAdd} adding={adding} />
+        {addError && <p className="text-xs text-red-500">{addError}</p>}
+        {addedCodes.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-zinc-400">已添加：</span>
+            {addedCodes.map((c) => {
+              const f = funds.find((x) => x.code === c);
+              return (
+                <span
+                  key={c}
+                  className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+                >
+                  <button type="button" onClick={() => setSelectedCode(c)} className="hover:underline">
+                    {f ? f.name : c}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(c)}
+                    aria-label="移除"
+                    className="ml-0.5 text-base leading-none text-blue-400 hover:text-red-500"
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {/* 工具栏 + 列表 */}

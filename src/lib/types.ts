@@ -1,6 +1,16 @@
 // 领域类型定义：基金、净值、预测信号
 
-export type FundType = "股票型" | "混合型" | "债券型" | "指数型" | "QDII";
+// 常见类型给出字面量提示，同时允许接口返回的任意类型字符串（如“指数型-股票”取“指数型”）
+export type FundType = "股票型" | "混合型" | "债券型" | "指数型" | "QDII" | (string & {});
+
+/** 基金检索结果的元信息（来自搜索接口） */
+export interface FundMeta {
+  code: string;
+  name: string;
+  type: string;
+  manager: string;
+  company: string;
+}
 
 export interface NavPoint {
   /** 交易日，格式 YYYY-MM-DD */
