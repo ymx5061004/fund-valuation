@@ -95,7 +95,10 @@ export async function fetchHistory(code: string, limit = 250): Promise<NavPoint[
     const m = text.match(/Data_netWorthTrend\s*=\s*(\[[^\]]*\])/);
     if (!m) return [];
     const arr = JSON.parse(m[1]) as { x: number; y: number }[];
-    return arr.slice(-limit).map((p) => ({ date: tsToDate(p.x), nav: Number(p.y.toFixed(4)) }));
+    return arr
+      .slice(-limit)
+      .map((p) => ({ date: tsToDate(p.x), nav: Number(p.y.toFixed(4)) }))
+      .filter((p) => Number.isFinite(p.nav) && p.nav > 0); // 剔除异常/缺失净值，避免下游除零
   } catch {
     return [];
   }
@@ -162,13 +165,33 @@ async function fetchRanking(limit: number, sort: RankSort): Promise<{ code: stri
   }
 }
 
-/** 拉取热门榜基金的完整数据（默认按近1年涨幅）。排行榜失败时回退到内置代码。 */
+/** 去掉基金名结尾的份额类别字母（如 A/B/C/E），用于合并同一只基金的多份额。
+ *  仅在结尾字母前是中文/数字/右括号时才剥离，避免误伤英文名结尾。 */
+function baseFundName(name: string): string {
+  const m = name.match(/^(.*[一-龥)）0-9])([A-Z])$/);
+  return m ? m[1] : name;
+}
+
+/** 拉取热门榜基金的完整数据（默认按近1年涨幅）。
+ *  按份额去重（同一只基金的 A/C 只保留排名更高的一个），排行榜失败时回退到内置代码。 */
 export async function fetchPopularFunds(limit = 8, sort: RankSort = "1nzf"): Promise<Fund[]> {
-  const ranked = await fetchRanking(limit, sort);
-  const entries: { code: string; name: string; type?: string; manager?: string }[] =
-    ranked.length > 0 ? ranked : RANK_FALLBACK.slice(0, limit);
+  // 多取一些，去重后再截断到 limit
+  const ranked = await fetchRanking(Math.min(limit * 4, 50), sort);
+  const source: { code: string; name: string; type?: string; manager?: string }[] =
+    ranked.length > 0 ? ranked : RANK_FALLBACK;
+
+  const seen = new Set<string>();
+  const picked: typeof source = [];
+  for (const e of source) {
+    const key = baseFundName(e.name) || e.code; // 名称为空时退化为按代码
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(e);
+    if (picked.length >= limit) break;
+  }
+
   const funds = await Promise.all(
-    entries.map((e) => buildFund(e.code, { name: e.name, type: e.type, manager: e.manager })),
+    picked.map((e) => buildFund(e.code, { name: e.name, type: e.type, manager: e.manager })),
   );
   return funds.filter((f): f is Fund => f !== null);
 }

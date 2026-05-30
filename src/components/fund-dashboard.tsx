@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Fund, FundMeta, FundType, Prediction, RankSort, Signal } from "@/lib/types";
 import { predict } from "@/lib/prediction";
+import { backtest } from "@/lib/backtest";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import { NavChart } from "@/components/nav-chart";
 import { PredictionPanel } from "@/components/prediction-panel";
 import { HoldingsCalculator } from "@/components/holdings-calculator";
 import { FundSearch } from "@/components/fund-search";
+import { BacktestPanel } from "@/components/backtest-panel";
 
 const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
@@ -247,15 +249,32 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
   }, [funds, onlyWatch, watchSet, typeFilter, query, sort, signals]);
 
   const selected = funds.find((f) => f.code === selectedCode) ?? funds[0];
-  const selectedPrediction = predictions[selected.code];
+  const backtestResult = useMemo(
+    () => (selected ? backtest(selected, 5) : null),
+    // navHistory 引用在实时轮询中保持不变，用 code + navHistory 作稳定 key，
+    // 避免估值每 15s 跳动触发 O(n^2) 回测的无谓重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected?.code, selected?.navHistory],
+  );
 
   const stats = useMemo(() => {
     const list = Object.values(predictions);
     const bull = list.filter((p) => p.signal === "bullish").length;
     const bear = list.filter((p) => p.signal === "bearish").length;
-    const avg = funds.reduce((s, f) => s + f.estimateChangePct, 0) / funds.length;
+    const avg = funds.length ? funds.reduce((s, f) => s + f.estimateChangePct, 0) / funds.length : 0;
     return { bull, bear, avg };
   }, [predictions, funds]);
+
+  // 理论上 funds 恒非空（服务端 mock 兜底 + 榜单基金不可移除），此处仍做空态兜底以防万一
+  if (!selected) {
+    return (
+      <div className="mx-auto w-full max-w-7xl px-4 py-16 text-center text-sm text-zinc-400">
+        暂无基金数据，请稍后重试。
+      </div>
+    );
+  }
+
+  const selectedPrediction = predictions[selected.code];
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:py-8">
@@ -403,6 +422,7 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
 
         <div className="space-y-4">
           <PredictionPanel prediction={selectedPrediction} />
+          <BacktestPanel result={backtestResult} />
           <HoldingsCalculator
             fund={selected}
             shares={holdings[selected.code] ?? 0}
