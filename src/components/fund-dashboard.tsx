@@ -1,14 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { Fund, Prediction, Signal } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import type { Fund, FundType, Prediction, Signal } from "@/lib/types";
 import { predict } from "@/lib/prediction";
+import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FundList } from "@/components/fund-list";
+import { FundToolbar, type SortKey } from "@/components/fund-toolbar";
 import { NavChart } from "@/components/nav-chart";
 import { PredictionPanel } from "@/components/prediction-panel";
+import { HoldingsCalculator } from "@/components/holdings-calculator";
+
+const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
 function Stat({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
@@ -23,10 +28,46 @@ function Stat({ label, value, valueClass }: { label: string; value: string; valu
   );
 }
 
-export function FundDashboard({ funds }: { funds: Fund[] }) {
-  const [selectedCode, setSelectedCode] = useState(funds[0]?.code ?? "");
+export function FundDashboard({ funds: initialFunds }: { funds: Fund[] }) {
+  const [funds, setFunds] = useState(initialFunds);
+  const [selectedCode, setSelectedCode] = useState(initialFunds[0]?.code ?? "");
 
-  // 所有基金的预测（用于列表徽标与概览统计）
+  // 列表筛选/排序状态
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<FundType | "all">("all");
+  const [sort, setSort] = useState<SortKey>("change-desc");
+  const [onlyWatch, setOnlyWatch] = useState(false);
+
+  // 持久化：自选 & 持仓份额
+  const [watch, setWatch] = useLocalStorage<string[]>("fv.watchlist", []);
+  const [holdings, setHoldings] = useLocalStorage<Record<string, number>>("fv.holdings", {});
+
+  // 模拟盘中实时刷新
+  const [live, setLive] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => {
+      setFunds((prev) =>
+        prev.map((f) => {
+          const drift = (Math.random() - 0.5) * 0.004; // 每次 ±0.2% 抖动
+          const estimateNav = Number(Math.max(0.2, f.estimateNav * (1 + drift)).toFixed(4));
+          const estimateChangePct = Number((((estimateNav - f.nav) / f.nav) * 100).toFixed(2));
+          return { ...f, estimateNav, estimateChangePct }; // navHistory 引用保持不变，图表不会重绘
+        }),
+      );
+      const d = new Date();
+      setUpdatedAt(`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
+    }, 2500);
+    return () => clearInterval(id);
+  }, [live]);
+
+  const watchSet = useMemo(() => new Set(watch), [watch]);
+  const toggleWatch = (code: string) =>
+    setWatch((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+
+  // 全部基金的预测（列表徽标 + 统计）。预测基于历史净值，实时估值跳动不影响它。
   const predictions = useMemo(() => {
     const map: Record<string, Prediction> = {};
     for (const f of funds) map[f.code] = predict(f);
@@ -38,6 +79,36 @@ export function FundDashboard({ funds }: { funds: Fund[] }) {
     for (const code in predictions) map[code] = predictions[code].signal;
     return map;
   }, [predictions]);
+
+  // 筛选 + 排序
+  const visible = useMemo(() => {
+    let list = funds;
+    if (onlyWatch) list = list.filter((f) => watchSet.has(f.code));
+    if (typeFilter !== "all") list = list.filter((f) => f.type === typeFilter);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (f) => f.name.toLowerCase().includes(q) || f.code.includes(q) || f.manager.toLowerCase().includes(q),
+      );
+    }
+    const sorted = [...list];
+    const rank: Record<Signal, number> = { bullish: 0, neutral: 1, bearish: 2 };
+    switch (sort) {
+      case "change-desc":
+        sorted.sort((a, b) => b.estimateChangePct - a.estimateChangePct);
+        break;
+      case "change-asc":
+        sorted.sort((a, b) => a.estimateChangePct - b.estimateChangePct);
+        break;
+      case "name":
+        sorted.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+        break;
+      case "signal":
+        sorted.sort((a, b) => rank[signals[a.code]] - rank[signals[b.code]]);
+        break;
+    }
+    return sorted;
+  }, [funds, onlyWatch, watchSet, typeFilter, query, sort, signals]);
 
   const selected = funds.find((f) => f.code === selectedCode) ?? funds[0];
   const selectedPrediction = predictions[selected.code];
@@ -52,13 +123,28 @@ export function FundDashboard({ funds }: { funds: Fund[] }) {
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:py-8">
-      {/* 标题 */}
-      <header className="space-y-1">
-        <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 sm:text-2xl">基金估值与涨跌预测</h1>
-        <p className="text-sm text-zinc-500">盘中实时估值 · 技术指标方向研判 · 手机/电脑自适应（演示数据）</p>
+      {/* 标题 + 实时刷新开关 */}
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 sm:text-2xl">基金估值与涨跌预测</h1>
+          <p className="text-sm text-zinc-500">盘中实时估值 · 技术指标方向研判 · 手机/电脑自适应（演示数据）</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setLive((v) => !v)}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+            live
+              ? "border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400"
+              : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+          )}
+        >
+          <span className={cn("h-2 w-2 rounded-full", live ? "animate-pulse bg-red-500" : "bg-zinc-400")} />
+          {live ? `实时中 · ${updatedAt ?? "--:--:--"}` : "模拟实时刷新"}
+        </button>
       </header>
 
-      {/* 概览统计：手机 2 列，PC 4 列 */}
+      {/* 概览统计 */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="跟踪基金数" value={`${funds.length}`} />
         <Stat label="看涨" value={`${stats.bull}`} valueClass="text-red-600 dark:text-red-500" />
@@ -66,13 +152,31 @@ export function FundDashboard({ funds }: { funds: Fund[] }) {
         <Stat label="平均估值涨跌" value={formatPct(stats.avg)} valueClass={changeColor(stats.avg)} />
       </section>
 
-      {/* 列表 */}
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500">基金列表（点击查看详情）</h2>
-        <FundList funds={funds} selectedCode={selected.code} signals={signals} onSelect={setSelectedCode} />
+      {/* 工具栏 + 列表 */}
+      <section className="space-y-3">
+        <FundToolbar
+          query={query}
+          onQuery={setQuery}
+          type={typeFilter}
+          onType={setTypeFilter}
+          sort={sort}
+          onSort={setSort}
+          onlyWatch={onlyWatch}
+          onOnlyWatch={setOnlyWatch}
+          watchCount={watch.length}
+          resultCount={visible.length}
+        />
+        <FundList
+          funds={visible}
+          selectedCode={selected.code}
+          signals={signals}
+          watchSet={watchSet}
+          onSelect={setSelectedCode}
+          onToggleWatch={toggleWatch}
+        />
       </section>
 
-      {/* 选中基金详情：PC 三栏（图表占 2 栏 + 预测 1 栏），手机上下堆叠 */}
+      {/* 选中基金详情 */}
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
@@ -101,7 +205,14 @@ export function FundDashboard({ funds }: { funds: Fund[] }) {
           </CardContent>
         </Card>
 
-        <PredictionPanel prediction={selectedPrediction} />
+        <div className="space-y-4">
+          <PredictionPanel prediction={selectedPrediction} />
+          <HoldingsCalculator
+            fund={selected}
+            shares={holdings[selected.code] ?? 0}
+            onShares={(n) => setHoldings((prev) => ({ ...prev, [selected.code]: n }))}
+          />
+        </div>
       </section>
     </div>
   );

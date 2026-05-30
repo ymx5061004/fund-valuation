@@ -6,16 +6,39 @@ interface Props {
   funds: Fund[];
   selectedCode: string;
   signals: Record<string, Signal>;
+  watchSet: Set<string>;
   onSelect: (code: string) => void;
+  onToggleWatch: (code: string) => void;
+}
+
+function StarButton({ active, onClick }: { active: boolean; onClick: (e: React.MouseEvent) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={active ? "取消自选" : "加入自选"}
+      className={cn(
+        "rounded p-1 text-base leading-none transition-colors",
+        active ? "text-amber-400" : "text-zinc-300 hover:text-amber-300 dark:text-zinc-600",
+      )}
+    >
+      {active ? "★" : "☆"}
+    </button>
+  );
 }
 
 /**
- * 基金列表，演示「响应式表格」的标准做法：
- *  - 中屏及以上(md+) 渲染完整表格
- *  - 手机端隐藏表格，改用卡片列表（横向表格在手机上体验差）
- * 两种视图共用同一份数据与选中逻辑。
+ * 基金列表：PC 渲染表格、手机渲染卡片，共用同一份数据与交互。
  */
-export function FundList({ funds, selectedCode, signals, onSelect }: Props) {
+export function FundList({ funds, selectedCode, signals, watchSet, onSelect, onToggleWatch }: Props) {
+  if (funds.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-zinc-300 py-12 text-center text-sm text-zinc-400 dark:border-zinc-700">
+        未找到匹配的基金，试试调整搜索或筛选条件。
+      </div>
+    );
+  }
+
   return (
     <>
       {/* ===== PC / 平板：表格 ===== */}
@@ -23,6 +46,7 @@ export function FundList({ funds, selectedCode, signals, onSelect }: Props) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-zinc-100 text-left text-xs text-zinc-500 dark:border-zinc-800">
+              <th className="w-10 px-2 py-3" />
               <th className="px-4 py-3 font-medium">基金 / 代码</th>
               <th className="px-4 py-3 font-medium">类型</th>
               <th className="px-4 py-3 text-right font-medium">最新净值</th>
@@ -41,6 +65,15 @@ export function FundList({ funds, selectedCode, signals, onSelect }: Props) {
                   f.code === selectedCode && "bg-blue-50/70 hover:bg-blue-50 dark:bg-blue-950/30 dark:hover:bg-blue-950/40",
                 )}
               >
+                <td className="px-2 py-3 text-center">
+                  <StarButton
+                    active={watchSet.has(f.code)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleWatch(f.code);
+                    }}
+                  />
+                </td>
                 <td className="px-4 py-3">
                   <div className="font-medium text-zinc-900 dark:text-zinc-100">{f.name}</div>
                   <div className="text-xs text-zinc-400">{f.code} · {f.manager}</div>
@@ -65,12 +98,16 @@ export function FundList({ funds, selectedCode, signals, onSelect }: Props) {
       {/* ===== 手机：卡片 ===== */}
       <div className="grid grid-cols-1 gap-3 md:hidden">
         {funds.map((f) => (
-          <button
+          <div
             key={f.code}
-            type="button"
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(f.code)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") onSelect(f.code);
+            }}
             className={cn(
-              "rounded-xl border bg-white p-4 text-left transition-colors dark:bg-zinc-900",
+              "cursor-pointer rounded-xl border bg-white p-4 text-left transition-colors dark:bg-zinc-900",
               f.code === selectedCode
                 ? "border-blue-400 ring-1 ring-blue-200 dark:border-blue-600 dark:ring-blue-900"
                 : "border-zinc-200 dark:border-zinc-800",
@@ -81,7 +118,16 @@ export function FundList({ funds, selectedCode, signals, onSelect }: Props) {
                 <div className="truncate font-medium text-zinc-900 dark:text-zinc-100">{f.name}</div>
                 <div className="mt-0.5 text-xs text-zinc-400">{f.code} · {f.manager}</div>
               </div>
-              <SignalBadge signal={signals[f.code]} />
+              <div className="flex shrink-0 items-center gap-1">
+                <SignalBadge signal={signals[f.code]} />
+                <StarButton
+                  active={watchSet.has(f.code)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleWatch(f.code);
+                  }}
+                />
+              </div>
             </div>
             <div className="mt-3 flex items-end justify-between">
               <div className="flex items-center gap-2">
@@ -92,7 +138,7 @@ export function FundList({ funds, selectedCode, signals, onSelect }: Props) {
                 {formatPct(f.estimateChangePct)}
               </div>
             </div>
-          </button>
+          </div>
         ))}
       </div>
     </>

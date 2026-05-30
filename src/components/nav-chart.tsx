@@ -98,7 +98,8 @@ export function NavChart({ fund }: { fund: Fund }) {
       },
       true,
     );
-  }, [fund]);
+    // 仅在切换基金或历史净值变化时重绘；盘中估值跳动不触发（navHistory 引用不变）
+  }, [fund.code, fund.navHistory]);
 
   return <div ref={elRef} className="h-[300px] w-full sm:h-[360px]" />;
 }
