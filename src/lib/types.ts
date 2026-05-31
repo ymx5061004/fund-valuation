@@ -15,6 +15,26 @@ export interface FundMeta {
   company: string;
 }
 
+/** 用户持仓（手动导入） */
+export interface Position {
+  code: string;
+  name: string;
+  /** 持有份额 */
+  shares: number;
+  /** 成本价（单位成本净值） */
+  cost: number;
+}
+
+/** 实时估值行情（/api/estimate 返回项） */
+export interface Quote {
+  code: string;
+  name: string;
+  nav: number;
+  estimateNav: number;
+  estimateChangePct: number;
+  gztime: string;
+}
+
 export interface NavPoint {
   /** 交易日，格式 YYYY-MM-DD */
   date: string;
