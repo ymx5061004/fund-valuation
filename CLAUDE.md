@@ -85,7 +85,7 @@ src/
   导入用 `ImportSheet`：**手动导入已实现**（复用 `FundSearch` 选基金 + 填份额/成本，可编辑/删除）；**截图导入仅占位**（OCR 待接，用户暂定先不接）。
 - **/market（行情）** = 原「热门榜 + 涨跌预测」仪表盘（`FundDashboard`）。默认列表＝排行榜实时热门（近1年，UI「热门基金榜」可切维度），**A/C 份额已去重**；可搜索添加任意基金（`fv.added`）；自选 `fv.watchlist`、计算器份额 `fv.holdings`；「实时估值刷新」每 15s 轮询 `/api/estimate`；含**涨跌预测**(prediction.ts) 与**历史回测**(backtest.ts，look-ahead 安全 → `BacktestPanel`)。
 - **/watchlist（自选）** = `WatchlistView`。读写 `localStorage('fv.watchlist')`（与 /market 的 ★ 同步）。
-  **横向滚动表格**：名称列 sticky 固定，指标列右滑——当日涨幅 / 当日估值 / 最新净值 / 本周 / 本月 / 今年 / 近一年。
+  **横向滚动表格**：名称列 sticky 固定，指标列右滑——当日涨幅(确认涨幅+净值，堆叠) / 盘中估值(估算涨幅+估算净值，堆叠) / 本周 / 本月 / 今年 / 近一年。
   数据走 **`/api/quotes`**（`fetchQuoteMetrics`：周/月/今年/近一年按历史净值相对最新净值日计算；**当日涨幅 `dayChangePct`**=交易时段(`isTradingNow`)用估值涨幅、否则用最新两笔净值的官方确认涨幅 —— 已与养基宝截图逐项对齐)，每 30s 刷新；可搜索添加、点 ★ 移除、按当日涨幅排序。
   注：「关联板块」「重仓均涨幅」需养基宝自建数据，天天基金接口拿不到，未做（第二列改显当日估值）。
 - **/news /member /me** = 占位页（`ComingSoon`），待做。

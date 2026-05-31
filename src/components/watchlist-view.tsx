@@ -110,7 +110,7 @@ export function WatchlistView() {
                       当日涨幅 <span className="text-[10px]">{sortDesc ? "▼" : "▲"}</span>
                     </button>
                   </th>
-                  {["最新净值", "本周", "本月", "今年", "近一年"].map((h) => (
+                  {["盘中估值", "本周", "本月", "今年", "近一年"].map((h) => (
                     <th key={h} className={cn(METRIC_HEAD, "border-b border-zinc-100 dark:border-zinc-800")}>
                       {h}
                     </th>
@@ -145,7 +145,12 @@ export function WatchlistView() {
                       </div>
                       <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.dayNav) : ""}</div>
                     </td>
-                    <td className={cn(METRIC_CELL, "text-zinc-700 dark:text-zinc-300")}>{m ? formatNav(m.nav) : "--"}</td>
+                    <td className={METRIC_CELL}>
+                      <div className={cn("font-semibold", changeColor(m?.estimateChangePct ?? 0))}>
+                        {m ? formatPct(m.estimateChangePct) : "--"}
+                      </div>
+                      <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.estimateNav) : ""}</div>
+                    </td>
                     <td className={cn(METRIC_CELL, "font-medium")}>
                       <Pct v={m?.weekPct} />
                     </td>
@@ -164,7 +169,7 @@ export function WatchlistView() {
             </table>
           </div>
           <p className="px-4 py-3 text-center text-[11px] text-zinc-400">
-            左右滑动查看更多指标 · 当日涨幅/估值来自实时估值(每20s刷新)，周/月/今年/近一年按历史净值计算 · 仅供参考
+            左右滑动查看更多指标 · 当日涨幅=确认/盘中涨幅，盘中估值=实时估算(每30s刷新)，周/月/今年/近一年按历史净值 · 仅供参考
           </p>
         </section>
       )}
