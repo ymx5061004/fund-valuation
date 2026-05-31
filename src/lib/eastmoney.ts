@@ -4,7 +4,7 @@
 //    浏览器直接 fetch 会被拦或无法解析。
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
-import type { Fund, FundMeta, FundType, IndexQuote, NavPoint, QuoteMetrics, RankSort } from "./types";
+import type { Fund, FundMeta, FundType, IndexDetail, IndexQuote, NavPoint, QuoteMetrics, RankSort } from "./types";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -274,12 +274,19 @@ interface IndexDiff {
   f3: number; // 涨跌幅 %
   f4: number; // 涨跌点数
   f12: string; // 代码
+  f13: number; // 市场(1沪 0深 100全球)
   f14: string; // 名称
+  f5?: number; // 成交量(手)
+  f6?: number; // 成交额(元)
+  f15?: number; // 最高
+  f16?: number; // 最低
+  f17?: number; // 开盘
+  f18?: number; // 昨收
 }
 
 async function fetchIndicesFrom(host: string): Promise<IndexQuote[] | null> {
   try {
-    const url = `https://${host}/api/qt/ulist.np/get?fltt=2&secids=${INDEX_SECIDS}&fields=f2,f3,f4,f12,f14`;
+    const url = `https://${host}/api/qt/ulist.np/get?fltt=2&secids=${INDEX_SECIDS}&fields=f2,f3,f4,f12,f13,f14`;
     const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { diff?: IndexDiff[] } };
@@ -287,7 +294,7 @@ async function fetchIndicesFrom(host: string): Promise<IndexQuote[] | null> {
     if (!diff || diff.length === 0) return null;
     return diff
       .filter((d) => typeof d.f2 === "number")
-      .map((d) => ({ code: d.f12, name: d.f14, price: d.f2, change: d.f4, changePct: d.f3 }));
+      .map((d) => ({ secid: `${d.f13}.${d.f12}`, code: d.f12, name: d.f14, price: d.f2, change: d.f4, changePct: d.f3 }));
   } catch {
     return null;
   }
@@ -296,6 +303,67 @@ async function fetchIndicesFrom(host: string): Promise<IndexQuote[] | null> {
 /** 拉取大盘指数行情：实时主机 push2 优先，失败回退延迟主机 push2delay。 */
 export async function fetchIndices(): Promise<IndexQuote[]> {
   return (await fetchIndicesFrom("push2.eastmoney.com")) ?? (await fetchIndicesFrom("push2delay.eastmoney.com")) ?? [];
+}
+
+// ---- 指数详情（行情 + 分时） ----
+
+async function fetchIndexQuoteFrom(host: string, secid: string): Promise<Omit<IndexDetail, "trend"> | null> {
+  try {
+    const url = `https://${host}/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secid)}&fields=f2,f3,f4,f5,f6,f12,f13,f14,f15,f16,f17,f18`;
+    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as { data?: { diff?: IndexDiff[] } };
+    const d = json.data?.diff?.[0];
+    if (!d || typeof d.f2 !== "number") return null;
+    return {
+      secid: `${d.f13}.${d.f12}`,
+      code: d.f12,
+      name: d.f14,
+      price: d.f2,
+      change: d.f4,
+      changePct: d.f3,
+      high: d.f15 ?? 0,
+      low: d.f16 ?? 0,
+      open: d.f17 ?? 0,
+      prevClose: d.f18 ?? 0,
+      volume: d.f5 ?? 0,
+      amount: d.f6 ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchIndexTrendFrom(host: string, secid: string): Promise<{ time: string; price: number }[] | null> {
+  try {
+    const url = `https://${host}/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2&fields2=f51,f53&iscr=0&ndays=1`;
+    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as { data?: { trends?: string[] } };
+    const trends = json.data?.trends;
+    if (!trends) return null;
+    return trends
+      .map((t) => {
+        const parts = t.split(",");
+        return { time: (parts[0] ?? "").slice(11, 16), price: Number(parts[1]) };
+      })
+      .filter((p) => p.time && Number.isFinite(p.price));
+  } catch {
+    return null;
+  }
+}
+
+/** 取单个指数的详情（行情 + 当日分时）。 */
+export async function fetchIndexDetail(secid: string): Promise<IndexDetail | null> {
+  const quote =
+    (await fetchIndexQuoteFrom("push2.eastmoney.com", secid)) ??
+    (await fetchIndexQuoteFrom("push2delay.eastmoney.com", secid));
+  if (!quote) return null;
+  const trend =
+    (await fetchIndexTrendFrom("push2his.eastmoney.com", secid)) ??
+    (await fetchIndexTrendFrom("push2.eastmoney.com", secid)) ??
+    [];
+  return { ...quote, trend };
 }
 
 /** 北京时间「今天」的日期字符串 YYYY-MM-DD */

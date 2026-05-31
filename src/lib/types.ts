@@ -17,6 +17,8 @@ export interface FundMeta {
 
 /** 大盘指数实时行情 */
 export interface IndexQuote {
+  /** 东方财富 secid，如 1.000001 */
+  secid: string;
   code: string;
   name: string;
   /** 当前点位 */
@@ -25,6 +27,26 @@ export interface IndexQuote {
   change: number;
   /** 涨跌幅 % */
   changePct: number;
+}
+
+/** 指数详情（行情 + 分时） */
+export interface IndexDetail {
+  secid: string;
+  code: string;
+  name: string;
+  price: number;
+  change: number;
+  changePct: number;
+  high: number;
+  low: number;
+  open: number;
+  prevClose: number;
+  /** 成交量（手） */
+  volume: number;
+  /** 成交额（元） */
+  amount: number;
+  /** 分时点（时间 HH:MM + 点位） */
+  trend: { time: string; price: number }[];
 }
 
 /** 用户持仓（手动导入） */

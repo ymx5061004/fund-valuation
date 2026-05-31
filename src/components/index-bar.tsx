@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import type { IndexQuote } from "@/lib/types";
 import { changeColor, cn } from "@/lib/utils";
 
@@ -36,10 +37,11 @@ export function IndexBar() {
         const up = idx.changePct > 0;
         const flat = idx.changePct === 0;
         return (
-          <div
+          <Link
             key={idx.code}
+            href={`/index/${idx.secid}`}
             className={cn(
-              "min-w-[30%] shrink-0 rounded-xl px-3 py-2.5 text-center sm:min-w-[150px]",
+              "min-w-[30%] shrink-0 rounded-xl px-3 py-2.5 text-center transition-opacity hover:opacity-80 sm:min-w-[150px]",
               flat
                 ? "bg-zinc-100 dark:bg-zinc-800"
                 : up
@@ -56,7 +58,7 @@ export function IndexBar() {
               {idx.change.toFixed(2)} {idx.changePct > 0 ? "+" : ""}
               {idx.changePct.toFixed(2)}%
             </div>
-          </div>
+          </Link>
         );
       })}
     </div>
