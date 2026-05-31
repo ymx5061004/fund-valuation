@@ -86,6 +86,8 @@ src/
 - **/market（行情）** = 原「热门榜 + 涨跌预测」仪表盘（`FundDashboard`）。默认列表＝排行榜实时热门（近1年，UI「热门基金榜」可切维度），**A/C 份额已去重**；可搜索添加任意基金（`fv.added`）；自选 `fv.watchlist`、计算器份额 `fv.holdings`；「实时估值刷新」每 15s 轮询 `/api/estimate`；含**涨跌预测**(prediction.ts) 与**历史回测**(backtest.ts，look-ahead 安全 → `BacktestPanel`)。
 - **/watchlist /news /member /me** = 占位页（`ComingSoon`），待做。
 
+> ⚠️ **涨跌预测 + 历史回测是「保留功能」，后续还要用**（现位于 /market 行情页）。重构或调整布局时**切勿删除** `prediction.ts` / `backtest.ts` / `PredictionPanel` / `BacktestPanel`，也不要把它们从 /market 里移除。
+
 ## 开发 / 部署 / Git
 
 - `npm run dev`（开发） / `npm run build`（= Vercel 的构建命令，提交前务必跑通：含 TS 类型检查 + lint）。
