@@ -39,8 +39,10 @@
 ```
 src/
 ├─ app/
-│  ├─ page.tsx              首页（服务端组件，async，export const revalidate=30 ISR）
-│  ├─ layout.tsx            根布局（lang=zh-CN、metadata、viewport）
+│  ├─ page.tsx              首页 = 持有页（渲染 HoldingsView）
+│  ├─ market/page.tsx       行情页（async + revalidate=30 ISR，渲染 FundDashboard）
+│  ├─ watchlist|news|member|me/page.tsx  占位页（ComingSoon）
+│  ├─ layout.tsx            根布局（lang=zh-CN、metadata、viewport、底部 TabBar）
 │  ├─ globals.css           Tailwind v4 + 主题色 + 中文字体回退
 │  └─ api/
 │     ├─ funds/             GET 全量（真实优先+mock兜底）
@@ -53,6 +55,7 @@ src/
 │  ├─ eastmoney.ts          ★服务端数据层：实时估值/历史/搜索/排行榜抓取与解析
 │  ├─ data.ts               getDashboardFunds：真实数据优先，失败回退 mock
 │  ├─ prediction.ts         ★预测「信号引擎」（可替换，见下）
+│  ├─ backtest.ts           ★回测（look-ahead 安全：方向命中率 + 信号策略 vs 持有）
 │  ├─ mock-data.ts          演示假数据（种子随机，可复现）；TRACKED_FUNDS 兜底代码也在 eastmoney.ts
 │  ├─ use-local-storage.ts  SSR 安全的 localStorage 钩子
 │  └─ utils.ts              cn / 格式化 / 红涨绿跌配色
@@ -73,12 +76,15 @@ src/
 **要换 LLM 研判或 ML 模型，只改 `predict` 内部实现、保持签名不变**，页面/组件无需改动。
 ⚠️ 任何预测**不构成投资建议**，UI 已内置「仅供参考、市场有风险」提示——改动时务必保留。
 
-## 功能现状
+## 应用结构与功能现状（底部 Tab 布局，养基宝风格）
 
-- 默认列表＝**排行榜实时热门**（默认近1年涨幅，UI「热门基金榜」选择器可切维度），**非写死**。
-- **搜索任意基金**加入列表（拉完整数据），添加的代码存 `localStorage('fv.added')`，可移除。
-- 自选收藏（`fv.watchlist`）、持仓份额（`fv.holdings`）均持久化。
-- 「实时估值刷新」开关：每 15s 轮询 `/api/estimate` 拉真实估值（只更新估值、不重绘图表）。
+`TabBar`（components/tab-bar.tsx）按路由高亮：持有 / 自选 / 行情 / 资讯 / 会员 / 我的。
+
+- **/（持有）** = 持仓记账首页（`HoldingsView`）。账户资产 / 当日收益 / 持有收益 + 持仓表 + 导入。
+  持仓存 `localStorage('fv.positions')` = `[{code,name,shares,cost}]`；当日收益用 `/api/estimate` 实时估值算、持有收益用成本算。
+  导入用 `ImportSheet`：**手动导入已实现**（复用 `FundSearch` 选基金 + 填份额/成本，可编辑/删除）；**截图导入仅占位**（OCR 待接，用户暂定先不接）。
+- **/market（行情）** = 原「热门榜 + 涨跌预测」仪表盘（`FundDashboard`）。默认列表＝排行榜实时热门（近1年，UI「热门基金榜」可切维度），**A/C 份额已去重**；可搜索添加任意基金（`fv.added`）；自选 `fv.watchlist`、计算器份额 `fv.holdings`；「实时估值刷新」每 15s 轮询 `/api/estimate`；含**涨跌预测**(prediction.ts) 与**历史回测**(backtest.ts，look-ahead 安全 → `BacktestPanel`)。
+- **/watchlist /news /member /me** = 占位页（`ComingSoon`），待做。
 
 ## 开发 / 部署 / Git
 
