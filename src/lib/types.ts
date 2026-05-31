@@ -48,6 +48,8 @@ export interface QuoteMetrics {
   estimateChangePct: number;
   /** 当日涨幅 %：已收盘用官方确认涨幅，盘中用估值涨幅 */
   dayChangePct: number;
+  /** 与 dayChangePct 同口径的净值：已收盘=最新净值，盘中=当日估值 */
+  dayNav: number;
   weekPct: number | null;
   monthPct: number | null;
   ytdPct: number | null;

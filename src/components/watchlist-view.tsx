@@ -110,7 +110,7 @@ export function WatchlistView() {
                       当日涨幅 <span className="text-[10px]">{sortDesc ? "▼" : "▲"}</span>
                     </button>
                   </th>
-                  {["当日估值", "最新净值", "本周", "本月", "今年", "近一年"].map((h) => (
+                  {["最新净值", "本周", "本月", "今年", "近一年"].map((h) => (
                     <th key={h} className={cn(METRIC_HEAD, "border-b border-zinc-100 dark:border-zinc-800")}>
                       {h}
                     </th>
@@ -139,10 +139,12 @@ export function WatchlistView() {
                         </div>
                       </div>
                     </td>
-                    <td className={cn(METRIC_CELL, "font-semibold", changeColor(m?.dayChangePct ?? 0))}>
-                      {m ? formatPct(m.dayChangePct) : "--"}
+                    <td className={METRIC_CELL}>
+                      <div className={cn("font-semibold", changeColor(m?.dayChangePct ?? 0))}>
+                        {m ? formatPct(m.dayChangePct) : "--"}
+                      </div>
+                      <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.dayNav) : ""}</div>
                     </td>
-                    <td className={cn(METRIC_CELL, "text-zinc-700 dark:text-zinc-300")}>{m ? formatNav(m.estimateNav) : "--"}</td>
                     <td className={cn(METRIC_CELL, "text-zinc-700 dark:text-zinc-300")}>{m ? formatNav(m.nav) : "--"}</td>
                     <td className={cn(METRIC_CELL, "font-medium")}>
                       <Pct v={m?.weekPct} />

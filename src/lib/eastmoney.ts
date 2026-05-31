@@ -298,6 +298,7 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   // 仅在交易时段、且估值对应日尚未公布净值时，用估值涨幅；否则用最新净值的确认涨幅
   const intraday = !!est && gzDate > last.date && isTradingNow();
   const dayChangePct = intraday ? est!.estimateChangePct : confirmedChange ?? est?.estimateChangePct ?? 0;
+  const dayNav = intraday ? est!.estimateNav : latestNav; // 与 dayChangePct 同口径
 
   return {
     code,
@@ -307,6 +308,7 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
     estimateNav: est?.estimateNav ?? latestNav,
     estimateChangePct: est?.estimateChangePct ?? 0,
     dayChangePct,
+    dayNav,
     weekPct: changePct(latestNav, navBefore(history, mondayStr)),
     monthPct: changePct(latestNav, navBefore(history, `${yStr}-${mStr}-01`)),
     ytdPct: changePct(latestNav, navBefore(history, `${yStr}-01-01`)),
