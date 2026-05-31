@@ -35,6 +35,25 @@ export interface Quote {
   gztime: string;
 }
 
+/** 自选列表用的多指标行情（/api/quotes 返回项），涨跌幅为 % 或 null（数据不足） */
+export interface QuoteMetrics {
+  code: string;
+  name: string;
+  /** 最新已公布净值 */
+  nav: number;
+  navDate: string;
+  /** 当日估值 */
+  estimateNav: number;
+  /** 估值涨幅 %（盘中估算） */
+  estimateChangePct: number;
+  /** 当日涨幅 %：已收盘用官方确认涨幅，盘中用估值涨幅 */
+  dayChangePct: number;
+  weekPct: number | null;
+  monthPct: number | null;
+  ytdPct: number | null;
+  yearPct: number | null;
+}
+
 export interface NavPoint {
   /** 交易日，格式 YYYY-MM-DD */
   date: string;

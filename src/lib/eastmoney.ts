@@ -4,7 +4,7 @@
 //    浏览器直接 fetch 会被拦或无法解析。
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
-import type { Fund, FundMeta, FundType, NavPoint, RankSort } from "./types";
+import type { Fund, FundMeta, FundType, NavPoint, QuoteMetrics, RankSort } from "./types";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -232,4 +232,84 @@ export async function searchFunds(key: string, fresh = false): Promise<FundMeta[
 /** 按代码取单只基金的完整数据（搜索添加用，取实时估值）。 */
 export async function fetchFundFull(code: string): Promise<Fund | null> {
   return buildFund(code, { fresh: true });
+}
+
+// ---- 自选列表多指标（当日/本周/本月/今年/近一年） ----
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+/** history 升序：返回最后一个 date < target 的净值 */
+function navBefore(history: NavPoint[], target: string): number | null {
+  let res: number | null = null;
+  for (const p of history) {
+    if (p.date < target) res = p.nav;
+    else break;
+  }
+  return res;
+}
+/** history 升序：返回最后一个 date <= target 的净值 */
+function navOnOrBefore(history: NavPoint[], target: string): number | null {
+  let res: number | null = null;
+  for (const p of history) {
+    if (p.date <= target) res = p.nav;
+    else break;
+  }
+  return res;
+}
+function changePct(latest: number, base: number | null): number | null {
+  if (base == null || base <= 0) return null;
+  return Number((((latest - base) / base) * 100).toFixed(2));
+}
+
+/** 当前是否处于 A 股交易时段（北京时间 周一~五 9:30-11:30 / 13:00-15:00） */
+function isTradingNow(): boolean {
+  const now = new Date();
+  const bj = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 8 * 3600000);
+  const day = bj.getUTCDay(); // 用 UTC 读取，因为已手动加到北京时间
+  if (day === 0 || day === 6) return false;
+  const minutes = bj.getUTCHours() * 60 + bj.getUTCMinutes();
+  return (minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900);
+}
+
+/** 取单只基金的多区间涨幅（用历史净值计算，区间相对最新净值日期）。 */
+export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | null> {
+  const [est, history] = await Promise.all([fetchEstimate(code, true), fetchHistory(code, 400)]);
+  if (history.length === 0) return null;
+  const last = history[history.length - 1];
+  const latestNav = last.nav;
+
+  const yStr = last.date.slice(0, 4);
+  const mStr = last.date.slice(5, 7);
+  const Y = Number(yStr);
+  const M = Number(mStr);
+  const D = Number(last.date.slice(8, 10));
+
+  // 本周一（以最新净值日期所在周计）
+  const dt = new Date(Y, M - 1, D);
+  const dow = (dt.getDay() + 6) % 7; // 0=周一
+  dt.setDate(dt.getDate() - dow);
+  const mondayStr = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+
+  // 当日涨幅：若估值对应的交易日尚未公布净值(盘中) → 用估值涨幅；否则用官方确认涨幅(最近两个净值)
+  const prevNav = history.length >= 2 ? history[history.length - 2].nav : null;
+  const confirmedChange = changePct(latestNav, prevNav);
+  const gzDate = est?.gztime?.slice(0, 10) ?? "";
+  // 仅在交易时段、且估值对应日尚未公布净值时，用估值涨幅；否则用最新净值的确认涨幅
+  const intraday = !!est && gzDate > last.date && isTradingNow();
+  const dayChangePct = intraday ? est!.estimateChangePct : confirmedChange ?? est?.estimateChangePct ?? 0;
+
+  return {
+    code,
+    name: est?.name ?? code,
+    nav: latestNav,
+    navDate: last.date,
+    estimateNav: est?.estimateNav ?? latestNav,
+    estimateChangePct: est?.estimateChangePct ?? 0,
+    dayChangePct,
+    weekPct: changePct(latestNav, navBefore(history, mondayStr)),
+    monthPct: changePct(latestNav, navBefore(history, `${yStr}-${mStr}-01`)),
+    ytdPct: changePct(latestNav, navBefore(history, `${yStr}-01-01`)),
+    yearPct: changePct(latestNav, navOnOrBefore(history, `${Y - 1}-${mStr}-${pad2(D)}`)),
+  };
 }
