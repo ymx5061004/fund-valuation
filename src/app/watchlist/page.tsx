@@ -1,5 +1,6 @@
-import { ComingSoon } from "@/components/coming-soon";
+import { WatchlistView } from "@/components/watchlist-view";
 
+// 自选 Tab
 export default function Page() {
-  return <ComingSoon title="自选" />;
+  return <WatchlistView />;
 }
