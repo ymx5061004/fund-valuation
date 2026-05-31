@@ -293,8 +293,10 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   const confirmedChange = changePct(latestNav, prevNav);
   const estChange = est?.estimateChangePct ?? 0; // 天天基金原始估值涨幅(gszzl)
   const gzDate = est?.gztime?.slice(0, 10) ?? "";
-  // 估值对应日 = 今天 且 新于最新净值日 → 今日净值未公布(盘中/待结算)，用估算涨幅并标「估」；
-  // 否则(已结算/周末/估值过期)用最新净值的官方确认涨幅
+  // 估值是否有效：估值对应日 > 最新净值日 ＝ 该日尚未公布净值(盘中/待结算)；
+  // 否则该日已结算，估值已过期(不应再显示)
+  const estimateFresh = !!est && gzDate > last.date;
+  // 当日涨幅：估值日=今天且未结算 → 用估算涨幅并标「估」；否则用最新净值的官方确认涨幅
   const estimated = !!est && gzDate > last.date && gzDate === todayBeijing();
   const dayChangePct = estimated ? estChange : confirmedChange ?? estChange;
   const dayNav = estimated ? est!.estimateNav : latestNav; // 与 dayChangePct 同口径
@@ -306,6 +308,7 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
     navDate: last.date,
     estimateNav: est?.estimateNav ?? latestNav,
     estimateChangePct: estChange,
+    estimateFresh,
     dayChangePct,
     dayNav,
     dayEstimated: estimated,

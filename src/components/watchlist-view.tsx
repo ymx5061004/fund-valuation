@@ -160,10 +160,16 @@ export function WatchlistView() {
                       <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.dayNav) : ""}</div>
                     </td>
                     <td className={METRIC_CELL}>
-                      <div className={cn("font-semibold", changeColor(m?.estimateChangePct ?? 0))}>
-                        {m ? formatPct(m.estimateChangePct) : "--"}
-                      </div>
-                      <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.estimateNav) : ""}</div>
+                      {m && !m.estimateFresh ? (
+                        <div className="text-zinc-300 dark:text-zinc-600">--</div>
+                      ) : (
+                        <>
+                          <div className={cn("font-semibold", changeColor(m?.estimateChangePct ?? 0))}>
+                            {m ? formatPct(m.estimateChangePct) : "--"}
+                          </div>
+                          <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.estimateNav) : ""}</div>
+                        </>
+                      )}
                     </td>
                     <td className={cn(METRIC_CELL, "font-medium")}>
                       <Pct v={m?.weekPct} />
@@ -183,7 +189,7 @@ export function WatchlistView() {
             </table>
           </div>
           <p className="px-4 py-3 text-center text-[11px] text-zinc-400">
-            左右滑动查看更多指标 · 当日涨幅=确认/盘中涨幅，盘中估值=实时估算(每30s刷新)，周/月/今年/近一年按历史净值 · 仅供参考
+            左右滑动查看更多指标 · 当日涨幅=确认/盘中涨幅，盘中估值=实时估算(每30s刷新；非交易/已结算显示 --)，周/月/今年/近一年按历史净值 · 仅供参考
           </p>
         </section>
       )}

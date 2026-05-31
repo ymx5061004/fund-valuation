@@ -46,6 +46,8 @@ export interface QuoteMetrics {
   estimateNav: number;
   /** 估值涨幅 %（盘中估算） */
   estimateChangePct: number;
+  /** 估值是否有效（对应日尚未公布净值＝盘中/待结算）；false 表示估值已过期，UI 应显示「--」 */
+  estimateFresh: boolean;
   /** 当日涨幅 %：今日净值未公布(盘中/待结算)用估值涨幅，否则用官方确认涨幅 */
   dayChangePct: number;
   /** 与 dayChangePct 同口径的净值：估算时=当日估值，否则=最新净值 */
