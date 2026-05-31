@@ -124,17 +124,14 @@ async function buildFund(code: string, opts: BuildOpts = {}): Promise<Fund | nul
   if (history.length === 0) return null; // 没有历史净值无法画图，视为失败
   const meta = metas.find((m) => m.code === code) ?? metas[0];
   const lastNav = history[history.length - 1].nav; // 权威「最新净值」= 历史净值最新点（gz 的 dwjz 偶尔滞后一天）
-  const estNav = est?.estimateNav ?? lastNav;
-  // 估值涨幅相对最新净值重算，保证与展示的净值口径一致
-  const estPct = est && lastNav > 0 ? Number((((estNav - lastNav) / lastNav) * 100).toFixed(2)) : 0;
   return {
     code,
     name: est?.name ?? opts.name ?? meta?.name ?? code,
     type: opts.type ?? meta?.type ?? "其他",
     manager: opts.manager ?? meta?.manager ?? "—",
     nav: lastNav,
-    estimateNav: estNav,
-    estimateChangePct: estPct,
+    estimateNav: est?.estimateNav ?? lastNav,
+    estimateChangePct: est?.estimateChangePct ?? 0, // 用天天基金原始估值涨幅(gszzl)，反映当日估算涨跌
     navHistory: history,
   };
 }
@@ -297,22 +294,20 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   // 当日涨幅：若估值对应的交易日尚未公布净值(盘中) → 用估值涨幅；否则用官方确认涨幅(最近两个净值)
   const prevNav = history.length >= 2 ? history[history.length - 2].nav : null;
   const confirmedChange = changePct(latestNav, prevNav);
-  // 估值涨幅相对最新净值重算（gz 的 dwjz 偶尔滞后一天，会导致口径不一致）
-  const estNav = est?.estimateNav ?? latestNav;
-  const estPct = est && latestNav > 0 ? Number((((estNav - latestNav) / latestNav) * 100).toFixed(2)) : 0;
+  const estChange = est?.estimateChangePct ?? 0; // 天天基金原始估值涨幅(gszzl)
   const gzDate = est?.gztime?.slice(0, 10) ?? "";
   // 仅在交易时段、且估值对应日尚未公布净值时，用估值涨幅；否则用最新净值的确认涨幅
   const intraday = !!est && gzDate > last.date && isTradingNow();
-  const dayChangePct = intraday ? estPct : confirmedChange ?? estPct;
-  const dayNav = intraday ? estNav : latestNav; // 与 dayChangePct 同口径
+  const dayChangePct = intraday ? estChange : confirmedChange ?? estChange;
+  const dayNav = intraday ? (est?.estimateNav ?? latestNav) : latestNav; // 与 dayChangePct 同口径
 
   return {
     code,
     name: est?.name ?? code,
     nav: latestNav,
     navDate: last.date,
-    estimateNav: estNav,
-    estimateChangePct: estPct,
+    estimateNav: est?.estimateNav ?? latestNav,
+    estimateChangePct: estChange,
     dayChangePct,
     dayNav,
     weekPct: changePct(latestNav, navBefore(history, mondayStr)),

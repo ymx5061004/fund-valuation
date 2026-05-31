@@ -22,7 +22,8 @@
 - **本机验证接口需联网**（东方财富/天天基金是国内站点）。
 - **dev 端口**：旧 `next dev` 进程没杀干净会占用 3000，新进程跳到 3001 并退出；构建/重启前先释放 3000。
 - **dev 异常 404**：反复 build/dev 切换可能让 `.next` 缓存错乱、已有路由全 404；`rm -rf .next` 重启即可。
-- **「最新净值」统一取历史净值(pingzhongdata)最新点**（`buildFund`/`fetchQuoteMetrics` 用 `lastNav`）；**不要用 gz 接口的 `dwjz`**（会滞后一天，导致行情/自选/历史口径对不上）。估值涨幅一律按最新净值重算，行情实时轮询也不覆盖 nav。
+- **「最新净值」统一取历史净值(pingzhongdata)最新点**（`buildFund`/`fetchQuoteMetrics` 用 `lastNav`）；**不要用 gz 接口的 `dwjz`**（会滞后一天，导致行情/自选/历史口径对不上）。行情实时轮询也不覆盖 nav。
+- **估值涨幅(estimateChangePct)用 gz 原始 gszzl，不要按最新净值重算**：gszzl 相对 gz 自己的 dwjz，反映当日估算涨跌(≈真实当日涨幅)；若按 lastNav 重算，周末/收盘 dwjz 滞后时会算出接近 0 的错值（曾踩坑）。
 
 ## 数据来源（天天基金 / 东方财富公开接口，**非官方**）
 
