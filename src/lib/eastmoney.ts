@@ -124,14 +124,17 @@ async function buildFund(code: string, opts: BuildOpts = {}): Promise<Fund | nul
   if (history.length === 0) return null; // 没有历史净值无法画图，视为失败
   const meta = metas.find((m) => m.code === code) ?? metas[0];
   const lastNav = history[history.length - 1].nav; // 权威「最新净值」= 历史净值最新点（gz 的 dwjz 偶尔滞后一天）
+  const estNav = est?.estimateNav ?? lastNav;
+  // 估值涨幅 = 估值相对最新净值的涨跌（与展示的估值/净值自洽）
+  const estPct = est && lastNav > 0 ? Number((((estNav - lastNav) / lastNav) * 100).toFixed(2)) : 0;
   return {
     code,
     name: est?.name ?? opts.name ?? meta?.name ?? code,
     type: opts.type ?? meta?.type ?? "其他",
     manager: opts.manager ?? meta?.manager ?? "—",
     nav: lastNav,
-    estimateNav: est?.estimateNav ?? lastNav,
-    estimateChangePct: est?.estimateChangePct ?? 0, // 用天天基金原始估值涨幅(gszzl)，反映当日估算涨跌
+    estimateNav: estNav,
+    estimateChangePct: estPct,
     navHistory: history,
   };
 }
@@ -291,23 +294,23 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   // 当日涨幅：若估值对应的交易日尚未公布净值(盘中) → 用估值涨幅；否则用官方确认涨幅(最近两个净值)
   const prevNav = history.length >= 2 ? history[history.length - 2].nav : null;
   const confirmedChange = changePct(latestNav, prevNav);
-  const estChange = est?.estimateChangePct ?? 0; // 天天基金原始估值涨幅(gszzl)
+  const estNav = est?.estimateNav ?? latestNav;
+  // 盘中估值涨幅 = 估值相对「最新净值」的涨跌（与展示的估值/净值自洽：估值>净值即为正）
+  const estPct = est && latestNav > 0 ? Number((((estNav - latestNav) / latestNav) * 100).toFixed(2)) : 0;
   const gzDate = est?.gztime?.slice(0, 10) ?? "";
-  // 估值是否有效：估值对应日 > 最新净值日 ＝ 该日尚未公布净值(盘中/待结算)；
-  // 否则该日已结算，估值已过期(不应再显示)
-  const estimateFresh = !!est && gzDate > last.date;
+  const estimateFresh = !!est; // 有估值即显示（无估值数据才显示 --）
   // 当日涨幅：估值日=今天且未结算 → 用估算涨幅并标「估」；否则用最新净值的官方确认涨幅
   const estimated = !!est && gzDate > last.date && gzDate === todayBeijing();
-  const dayChangePct = estimated ? estChange : confirmedChange ?? estChange;
-  const dayNav = estimated ? est!.estimateNav : latestNav; // 与 dayChangePct 同口径
+  const dayChangePct = estimated ? estPct : confirmedChange ?? estPct;
+  const dayNav = estimated ? estNav : latestNav; // 与 dayChangePct 同口径
 
   return {
     code,
     name: est?.name ?? code,
     nav: latestNav,
     navDate: last.date,
-    estimateNav: est?.estimateNav ?? latestNav,
-    estimateChangePct: estChange,
+    estimateNav: estNav,
+    estimateChangePct: estPct,
     estimateFresh,
     dayChangePct,
     dayNav,

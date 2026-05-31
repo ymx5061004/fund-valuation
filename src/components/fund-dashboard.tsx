@@ -88,8 +88,10 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
           prev.map((f) => {
             const e = map.get(f.code);
             if (!e) return f;
-            // 最新净值(nav)盘中不变；仅更新估值与其原始涨幅(gszzl)
-            return { ...f, estimateNav: e.estimateNav, estimateChangePct: e.estimateChangePct };
+            // 最新净值(nav)盘中不变；估值涨幅按 nav 重算（与展示的估值/净值自洽）
+            const estimateChangePct =
+              f.nav > 0 ? Number((((e.estimateNav - f.nav) / f.nav) * 100).toFixed(2)) : e.estimateChangePct;
+            return { ...f, estimateNav: e.estimateNav, estimateChangePct };
           }),
         );
         const d = new Date(json.updatedAt);
