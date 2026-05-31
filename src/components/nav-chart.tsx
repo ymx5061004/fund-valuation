@@ -17,7 +17,7 @@ function movingAverage(values: number[], period: number): (number | null)[] {
 const TEXT = "#71717a"; // zinc-500，浅色/深色背景下都清晰
 const SPLIT = "rgba(113,113,122,0.18)";
 
-export function NavChart({ fund }: { fund: Fund }) {
+export function NavChart({ fund, zoomStart = 55 }: { fund: Fund; zoomStart?: number }) {
   const elRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -74,8 +74,8 @@ export function NavChart({ fund }: { fund: Fund }) {
           axisLabel: { color: TEXT },
         },
         dataZoom: [
-          { type: "inside", start: 55, end: 100 },
-          { type: "slider", start: 55, end: 100, height: 18, bottom: 16 },
+          { type: "inside", start: zoomStart, end: 100 },
+          { type: "slider", start: zoomStart, end: 100, height: 18, bottom: 16 },
         ],
         series: [
           {
@@ -99,7 +99,7 @@ export function NavChart({ fund }: { fund: Fund }) {
       true,
     );
     // 仅在切换基金或历史净值变化时重绘；盘中估值跳动不触发（navHistory 引用不变）
-  }, [fund.code, fund.navHistory]);
+  }, [fund.code, fund.navHistory, zoomStart]);
 
   return <div ref={elRef} className="h-[300px] w-full sm:h-[360px]" />;
 }

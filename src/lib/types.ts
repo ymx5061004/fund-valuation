@@ -46,10 +46,12 @@ export interface QuoteMetrics {
   estimateNav: number;
   /** 估值涨幅 %（盘中估算） */
   estimateChangePct: number;
-  /** 当日涨幅 %：已收盘用官方确认涨幅，盘中用估值涨幅 */
+  /** 当日涨幅 %：今日净值未公布(盘中/待结算)用估值涨幅，否则用官方确认涨幅 */
   dayChangePct: number;
-  /** 与 dayChangePct 同口径的净值：已收盘=最新净值，盘中=当日估值 */
+  /** 与 dayChangePct 同口径的净值：估算时=当日估值，否则=最新净值 */
   dayNav: number;
+  /** dayChangePct 是否为估算值（用于显示「估」标记） */
+  dayEstimated: boolean;
   weekPct: number | null;
   monthPct: number | null;
   ytdPct: number | null;

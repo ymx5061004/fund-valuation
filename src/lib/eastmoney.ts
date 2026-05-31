@@ -262,14 +262,11 @@ function changePct(latest: number, base: number | null): number | null {
   return Number((((latest - base) / base) * 100).toFixed(2));
 }
 
-/** 当前是否处于 A 股交易时段（北京时间 周一~五 9:30-11:30 / 13:00-15:00） */
-function isTradingNow(): boolean {
+/** 北京时间「今天」的日期字符串 YYYY-MM-DD */
+function todayBeijing(): string {
   const now = new Date();
   const bj = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 8 * 3600000);
-  const day = bj.getUTCDay(); // 用 UTC 读取，因为已手动加到北京时间
-  if (day === 0 || day === 6) return false;
-  const minutes = bj.getUTCHours() * 60 + bj.getUTCMinutes();
-  return (minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900);
+  return `${bj.getUTCFullYear()}-${pad2(bj.getUTCMonth() + 1)}-${pad2(bj.getUTCDate())}`;
 }
 
 /** 取单只基金的多区间涨幅（用历史净值计算，区间相对最新净值日期）。 */
@@ -296,10 +293,11 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   const confirmedChange = changePct(latestNav, prevNav);
   const estChange = est?.estimateChangePct ?? 0; // 天天基金原始估值涨幅(gszzl)
   const gzDate = est?.gztime?.slice(0, 10) ?? "";
-  // 仅在交易时段、且估值对应日尚未公布净值时，用估值涨幅；否则用最新净值的确认涨幅
-  const intraday = !!est && gzDate > last.date && isTradingNow();
-  const dayChangePct = intraday ? estChange : confirmedChange ?? estChange;
-  const dayNav = intraday ? (est?.estimateNav ?? latestNav) : latestNav; // 与 dayChangePct 同口径
+  // 估值对应日 = 今天 且 新于最新净值日 → 今日净值未公布(盘中/待结算)，用估算涨幅并标「估」；
+  // 否则(已结算/周末/估值过期)用最新净值的官方确认涨幅
+  const estimated = !!est && gzDate > last.date && gzDate === todayBeijing();
+  const dayChangePct = estimated ? estChange : confirmedChange ?? estChange;
+  const dayNav = estimated ? est!.estimateNav : latestNav; // 与 dayChangePct 同口径
 
   return {
     code,
@@ -310,6 +308,7 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
     estimateChangePct: estChange,
     dayChangePct,
     dayNav,
+    dayEstimated: estimated,
     weekPct: changePct(latestNav, navBefore(history, mondayStr)),
     monthPct: changePct(latestNav, navBefore(history, `${yStr}-${mStr}-01`)),
     ytdPct: changePct(latestNav, navBefore(history, `${yStr}-01-01`)),

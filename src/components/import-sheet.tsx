@@ -9,6 +9,8 @@ interface Props {
   open: boolean;
   /** 不为 null 表示编辑已有持仓 */
   editing: Position | null;
+  /** 预选基金（如从详情页“添加持有”进入），固定基金只填份额/成本 */
+  presetFund?: { code: string; name: string } | null;
   onClose: () => void;
   onSave: (p: Position) => void;
   onRemove: (code: string) => void;
@@ -17,7 +19,7 @@ interface Props {
 const inputClass =
   "mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm tabular-nums outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 dark:border-zinc-700 dark:bg-zinc-800 dark:focus:ring-blue-900";
 
-export function ImportSheet({ open, editing, onClose, onSave, onRemove }: Props) {
+export function ImportSheet({ open, editing, presetFund, onClose, onSave, onRemove }: Props) {
   const [tab, setTab] = useState<"manual" | "screenshot">("manual");
   const [picked, setPicked] = useState<{ code: string; name: string } | null>(null);
   const [shares, setShares] = useState("");
@@ -31,12 +33,16 @@ export function ImportSheet({ open, editing, onClose, onSave, onRemove }: Props)
       setPicked({ code: editing.code, name: editing.name });
       setShares(String(editing.shares));
       setCost(String(editing.cost));
+    } else if (presetFund) {
+      setPicked(presetFund);
+      setShares("");
+      setCost("");
     } else {
       setPicked(null);
       setShares("");
       setCost("");
     }
-  }, [open, editing]);
+  }, [open, editing, presetFund]);
 
   if (!open) return null;
 
@@ -86,7 +92,7 @@ export function ImportSheet({ open, editing, onClose, onSave, onRemove }: Props)
                 <span className="min-w-0 truncate">
                   {picked.name} <span className="text-xs text-zinc-400">{picked.code}</span>
                 </span>
-                {!editing && (
+                {!editing && !presetFund && (
                   <button type="button" onClick={() => setPicked(null)} className="shrink-0 text-xs text-blue-600 dark:text-blue-400">
                     重选
                   </button>

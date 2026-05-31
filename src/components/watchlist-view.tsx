@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { FundMeta, QuoteMetrics } from "@/lib/types";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
@@ -23,6 +24,7 @@ const METRIC_HEAD = "px-3 py-2 text-right text-xs font-normal text-zinc-400 whit
 const METRIC_CELL = "px-3 py-3.5 text-right text-sm tabular-nums whitespace-nowrap";
 
 export function WatchlistView() {
+  const router = useRouter();
   const [watch, setWatch] = useLocalStorage<string[]>("fv.watchlist", []);
   const [metrics, setMetrics] = useState<Record<string, QuoteMetrics>>({});
   const [sortDesc, setSortDesc] = useState(true);
@@ -119,13 +121,20 @@ export function WatchlistView() {
               </thead>
               <tbody>
                 {rows.map(({ code, m }) => (
-                  <tr key={code} className="border-b border-zinc-50 dark:border-zinc-800/50">
+                  <tr
+                    key={code}
+                    onClick={() => router.push(`/fund/${code}`)}
+                    className="cursor-pointer border-b border-zinc-50 transition-colors hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/40"
+                  >
                     {/* 名称列：固定 */}
                     <td className="sticky left-0 z-10 border-r border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => remove(code)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            remove(code);
+                          }}
                           aria-label="取消自选"
                           className={cn("shrink-0 text-base leading-none", starColor(m?.dayChangePct))}
                         >
@@ -140,8 +149,13 @@ export function WatchlistView() {
                       </div>
                     </td>
                     <td className={METRIC_CELL}>
-                      <div className={cn("font-semibold", changeColor(m?.dayChangePct ?? 0))}>
+                      <div className={cn("flex items-center justify-end gap-0.5 font-semibold", changeColor(m?.dayChangePct ?? 0))}>
                         {m ? formatPct(m.dayChangePct) : "--"}
+                        {m?.dayEstimated && (
+                          <span className="rounded bg-zinc-100 px-1 text-[9px] font-normal text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">
+                            估
+                          </span>
+                        )}
                       </div>
                       <div className="mt-0.5 text-xs font-normal tabular-nums text-zinc-400">{m ? formatNav(m.dayNav) : ""}</div>
                     </td>

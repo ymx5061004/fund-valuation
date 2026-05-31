@@ -15,6 +15,8 @@ const TABS = [
 
 export function TabBar() {
   const pathname = usePathname();
+  // 基金详情页是全屏子页，隐藏底部主导航（详情页有自己的底部操作栏）
+  if (pathname.startsWith("/fund/")) return null;
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
       <ul className="mx-auto flex max-w-2xl">
