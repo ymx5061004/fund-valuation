@@ -15,6 +15,18 @@ export interface FundMeta {
   company: string;
 }
 
+/** 大盘指数实时行情 */
+export interface IndexQuote {
+  code: string;
+  name: string;
+  /** 当前点位 */
+  price: number;
+  /** 涨跌点数 */
+  change: number;
+  /** 涨跌幅 % */
+  changePct: number;
+}
+
 /** 用户持仓（手动导入） */
 export interface Position {
   code: string;

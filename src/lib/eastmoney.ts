@@ -4,7 +4,7 @@
 //    浏览器直接 fetch 会被拦或无法解析。
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
-import type { Fund, FundMeta, FundType, NavPoint, QuoteMetrics, RankSort } from "./types";
+import type { Fund, FundMeta, FundType, IndexQuote, NavPoint, QuoteMetrics, RankSort } from "./types";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -260,6 +260,42 @@ function navOnOrBefore(history: NavPoint[], target: string): number | null {
 function changePct(latest: number, base: number | null): number | null {
   if (base == null || base <= 0) return null;
   return Number((((latest - base) / base) * 100).toFixed(2));
+}
+
+// ---- 大盘指数实时行情（东方财富）----
+
+// secid: 1=沪市 0=深市 100=全球。顺序即展示顺序：
+// 上证/深证/创业板/沪深300/上证50/中证500/科创50/北证50/恒生/恒生科技/日经225/道琼斯/纳斯达克/标普500
+const INDEX_SECIDS =
+  "1.000001,0.399001,0.399006,1.000300,1.000016,1.000905,1.000688,0.899050,100.HSI,100.HSTECH,100.N225,100.DJIA,100.NDX,100.SPX";
+
+interface IndexDiff {
+  f2: number; // 当前点位
+  f3: number; // 涨跌幅 %
+  f4: number; // 涨跌点数
+  f12: string; // 代码
+  f14: string; // 名称
+}
+
+async function fetchIndicesFrom(host: string): Promise<IndexQuote[] | null> {
+  try {
+    const url = `https://${host}/api/qt/ulist.np/get?fltt=2&secids=${INDEX_SECIDS}&fields=f2,f3,f4,f12,f14`;
+    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as { data?: { diff?: IndexDiff[] } };
+    const diff = json.data?.diff;
+    if (!diff || diff.length === 0) return null;
+    return diff
+      .filter((d) => typeof d.f2 === "number")
+      .map((d) => ({ code: d.f12, name: d.f14, price: d.f2, change: d.f4, changePct: d.f3 }));
+  } catch {
+    return null;
+  }
+}
+
+/** 拉取大盘指数行情：实时主机 push2 优先，失败回退延迟主机 push2delay。 */
+export async function fetchIndices(): Promise<IndexQuote[]> {
+  return (await fetchIndicesFrom("push2.eastmoney.com")) ?? (await fetchIndicesFrom("push2delay.eastmoney.com")) ?? [];
 }
 
 /** 北京时间「今天」的日期字符串 YYYY-MM-DD */
