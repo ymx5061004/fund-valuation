@@ -124,24 +124,14 @@ async function buildFund(code: string, opts: BuildOpts = {}): Promise<Fund | nul
   if (history.length === 0) return null; // 没有历史净值无法画图，视为失败
   const meta = metas.find((m) => m.code === code) ?? metas[0];
   const lastNav = history[history.length - 1].nav; // 权威「最新净值」= 历史净值最新点（gz 的 dwjz 偶尔滞后一天）
-  const lastDate = history[history.length - 1].date;
-  const prevNav = history.length >= 2 ? history[history.length - 2].nav : null;
-  const confirmedChange = prevNav && prevNav > 0 ? Number((((lastNav - prevNav) / prevNav) * 100).toFixed(2)) : 0;
-  const gzDate = est?.gztime?.slice(0, 10) ?? "";
-  const estimateLive = !!est && gzDate > lastDate; // 估值对应日未公布净值＝实时估值在用
-  const rawEstNav = est?.estimateNav ?? lastNav;
-  const rawEstPct = est && lastNav > 0 ? Number((((rawEstNav - lastNav) / lastNav) * 100).toFixed(2)) : 0;
-  // 已结算则估值被实际净值取代，显示实际值
-  const estimateNav = estimateLive ? rawEstNav : lastNav;
-  const estimateChangePct = estimateLive ? rawEstPct : confirmedChange;
   return {
     code,
     name: est?.name ?? opts.name ?? meta?.name ?? code,
     type: opts.type ?? meta?.type ?? "其他",
     manager: opts.manager ?? meta?.manager ?? "—",
     nav: lastNav,
-    estimateNav,
-    estimateChangePct,
+    estimateNav: est?.estimateNav ?? lastNav, // 天天基金盘中估值(gsz)
+    estimateChangePct: est?.estimateChangePct ?? 0, // 估值涨幅(gszzl，相对前一交易日收盘)
     navHistory: history,
   };
 }
@@ -301,18 +291,14 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   // 当日涨幅：若估值对应的交易日尚未公布净值(盘中) → 用估值涨幅；否则用官方确认涨幅(最近两个净值)
   const prevNav = history.length >= 2 ? history[history.length - 2].nav : null;
   const confirmedChange = changePct(latestNav, prevNav);
-  const rawEstNav = est?.estimateNav ?? latestNav;
-  const rawEstPct = est && latestNav > 0 ? Number((((rawEstNav - latestNav) / latestNav) * 100).toFixed(2)) : 0;
   const gzDate = est?.gztime?.slice(0, 10) ?? "";
-  // 估值是否「在用」：估值对应日 > 最新净值日（该日净值还没出＝盘中/待结算的实时估值）
-  const estimateLive = !!est && gzDate > last.date;
-  // 盘中估值展示：实时估值进行中→用估值净值与其涨幅；已结算→估值已被实际净值取代，显示实际净值与确认涨幅
-  const estimateNav = estimateLive ? rawEstNav : latestNav;
-  const estimateChangePct = estimateLive ? rawEstPct : confirmedChange ?? 0;
-  // 当日涨幅：估值日=今天且未结算 → 实时估算并标「估」；否则官方确认涨幅
-  const estimated = estimateLive && gzDate === todayBeijing();
-  const dayChangePct = estimated ? rawEstPct : confirmedChange ?? rawEstPct;
-  const dayNav = estimated ? rawEstNav : latestNav;
+  // 盘中估值 = 天天基金原始盘中估值（估值净值 gsz + 估值涨幅 gszzl，相对前一交易日收盘算；是预估值，可能与实际净值有偏差）
+  const estimateNav = est?.estimateNav ?? latestNav;
+  const estimateChangePct = est?.estimateChangePct ?? 0;
+  // 当日涨幅：估值日=今天且未结算(净值未公布) → 用实时估值涨幅并标「估」；否则用官方确认涨幅
+  const estimated = !!est && gzDate > last.date && gzDate === todayBeijing();
+  const dayChangePct = estimated ? estimateChangePct : confirmedChange ?? estimateChangePct;
+  const dayNav = estimated ? estimateNav : latestNav;
 
   return {
     code,
