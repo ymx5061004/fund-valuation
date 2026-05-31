@@ -87,7 +87,11 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
         setFunds((prev) =>
           prev.map((f) => {
             const e = map.get(f.code);
-            return e ? { ...f, nav: e.nav, estimateNav: e.estimateNav, estimateChangePct: e.estimateChangePct } : f;
+            if (!e) return f;
+            // 最新净值(nav)盘中不变，保持历史口径；仅更新估值，并按 nav 重算估值涨幅
+            const estimateChangePct =
+              f.nav > 0 ? Number((((e.estimateNav - f.nav) / f.nav) * 100).toFixed(2)) : e.estimateChangePct;
+            return { ...f, estimateNav: e.estimateNav, estimateChangePct };
           }),
         );
         const d = new Date(json.updatedAt);

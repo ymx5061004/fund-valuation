@@ -21,6 +21,8 @@
 - **避免 hydration 不一致**：服务端组件生成数据传 props；localStorage 状态（自选/持仓/已添加）首屏用默认值、`useEffect` 挂载后再读（见 `use-local-storage.ts`）。`mock-data.ts` 用种子随机保证可复现。
 - **本机验证接口需联网**（东方财富/天天基金是国内站点）。
 - **dev 端口**：旧 `next dev` 进程没杀干净会占用 3000，新进程跳到 3001 并退出；构建/重启前先释放 3000。
+- **dev 异常 404**：反复 build/dev 切换可能让 `.next` 缓存错乱、已有路由全 404；`rm -rf .next` 重启即可。
+- **「最新净值」统一取历史净值(pingzhongdata)最新点**（`buildFund`/`fetchQuoteMetrics` 用 `lastNav`）；**不要用 gz 接口的 `dwjz`**（会滞后一天，导致行情/自选/历史口径对不上）。估值涨幅一律按最新净值重算，行情实时轮询也不覆盖 nav。
 
 ## 数据来源（天天基金 / 东方财富公开接口，**非官方**）
 
