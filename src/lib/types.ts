@@ -29,6 +29,27 @@ export interface IndexQuote {
   changePct: number;
 }
 
+/** K 线一根（日/周/月） */
+export interface KlineCandle {
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+}
+
+/** 指数成分股 */
+export interface ConstituentStock {
+  code: string;
+  name: string;
+  /** 最新价 */
+  price: number;
+  /** 涨跌幅 % */
+  changePct: number;
+  /** 流通市值（元） */
+  floatCap: number;
+}
+
 /** 指数详情（行情 + 分时） */
 export interface IndexDetail {
   secid: string;

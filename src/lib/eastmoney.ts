@@ -4,7 +4,18 @@
 //    浏览器直接 fetch 会被拦或无法解析。
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
-import type { Fund, FundMeta, FundType, IndexDetail, IndexQuote, NavPoint, QuoteMetrics, RankSort } from "./types";
+import type {
+  ConstituentStock,
+  Fund,
+  FundMeta,
+  FundType,
+  IndexDetail,
+  IndexQuote,
+  KlineCandle,
+  NavPoint,
+  QuoteMetrics,
+  RankSort,
+} from "./types";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -334,10 +345,10 @@ async function fetchIndexQuoteFrom(host: string, secid: string): Promise<Omit<In
   }
 }
 
-async function fetchIndexTrendFrom(host: string, secid: string): Promise<{ time: string; price: number }[] | null> {
+async function fetchTrendFrom(host: string, secid: string, ndays: number): Promise<{ time: string; price: number }[] | null> {
   try {
-    const url = `https://${host}/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2&fields2=f51,f53&iscr=0&ndays=1`;
-    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    const url = `https://${host}/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2&fields2=f51,f53&iscr=0&ndays=${ndays}`;
+    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 20 } });
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { trends?: string[] } };
     const trends = json.data?.trends;
@@ -345,12 +356,22 @@ async function fetchIndexTrendFrom(host: string, secid: string): Promise<{ time:
     return trends
       .map((t) => {
         const parts = t.split(",");
-        return { time: (parts[0] ?? "").slice(11, 16), price: Number(parts[1]) };
+        const dt = parts[0] ?? "";
+        return { time: ndays > 1 ? dt.slice(5, 16) : dt.slice(11, 16), price: Number(parts[1]) };
       })
       .filter((p) => p.time && Number.isFinite(p.price));
   } catch {
     return null;
   }
+}
+
+/** 分时数据：ndays=1 当日，ndays=5 五日。push2his 优先回退 push2。 */
+export async function fetchTrend(secid: string, ndays = 1): Promise<{ time: string; price: number }[]> {
+  return (
+    (await fetchTrendFrom("push2his.eastmoney.com", secid, ndays)) ??
+    (await fetchTrendFrom("push2.eastmoney.com", secid, ndays)) ??
+    []
+  );
 }
 
 /** 取单个指数的详情（行情 + 当日分时）。 */
@@ -359,11 +380,96 @@ export async function fetchIndexDetail(secid: string): Promise<IndexDetail | nul
     (await fetchIndexQuoteFrom("push2.eastmoney.com", secid)) ??
     (await fetchIndexQuoteFrom("push2delay.eastmoney.com", secid));
   if (!quote) return null;
-  const trend =
-    (await fetchIndexTrendFrom("push2his.eastmoney.com", secid)) ??
-    (await fetchIndexTrendFrom("push2.eastmoney.com", secid)) ??
-    [];
+  const trend = await fetchTrend(secid, 1);
   return { ...quote, trend };
+}
+
+// ---- K 线（日/周/月）----
+
+async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: number): Promise<KlineCandle[] | null> {
+  try {
+    // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低
+    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=0&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55`;
+    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 300 } });
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as { data?: { klines?: string[] } };
+    const klines = json.data?.klines;
+    if (!klines) return null;
+    return klines.map((k) => {
+      const p = k.split(",");
+      return { date: p[0], open: Number(p[1]), close: Number(p[2]), high: Number(p[3]), low: Number(p[4]) };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** K 线：klt 101日/102周/103月。 */
+export async function fetchKline(secid: string, klt: number, lmt = 120): Promise<KlineCandle[]> {
+  return (
+    (await fetchKlineFrom("push2his.eastmoney.com", secid, klt, lmt)) ??
+    (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt)) ??
+    []
+  );
+}
+
+// ---- 指数成分股（按市场涨跌幅榜，覆盖主要 A 股指数）----
+
+// secid → clist 市场过滤（仅这些指数的成分≈整段市场，可直接用涨跌幅榜）
+const INDEX_CONSTITUENT_FS: Record<string, string> = {
+  "1.000001": "m:1+t:2,m:1+t:23", // 上证指数 → 沪市A股
+  "0.399001": "m:0+t:6,m:0+t:80", // 深证成指 → 深市A股
+  "0.399006": "m:0+t:80", // 创业板指 → 创业板
+  "1.000688": "m:1+t:23", // 科创50 → 科创板
+  "0.899050": "m:0+t:81+s:2048", // 北证50 → 北交所
+};
+
+export function hasConstituents(secid: string): boolean {
+  return secid in INDEX_CONSTITUENT_FS;
+}
+
+interface ClistDiff {
+  f2: number;
+  f3: number;
+  f12: string;
+  f14: string;
+  f21: number;
+}
+
+async function fetchConstituentsFrom(
+  host: string,
+  fs: string,
+  pn: number,
+  pz: number,
+): Promise<{ stocks: ConstituentStock[]; total: number } | null> {
+  try {
+    const url = `https://${host}/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&fid=f3&fs=${encodeURIComponent(fs)}&fields=f2,f3,f12,f14,f21`;
+    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as { data?: { total?: number; diff?: Record<string, ClistDiff> } };
+    const diff = json.data?.diff;
+    if (!diff) return null;
+    const stocks = Object.values(diff).map((d) => ({
+      code: d.f12,
+      name: d.f14,
+      price: Number(d.f2) / 100, // 未用 fltt，价格/涨跌幅为放大100倍
+      changePct: Number(d.f3) / 100,
+      floatCap: Number(d.f21) || 0,
+    }));
+    return { stocks, total: json.data?.total ?? stocks.length };
+  } catch {
+    return null;
+  }
+}
+
+/** 指数成分股（按涨跌幅排序，分页）。不支持的指数返回 null。 */
+export async function fetchConstituents(secid: string, pn = 1, pz = 10): Promise<{ stocks: ConstituentStock[]; total: number } | null> {
+  const fs = INDEX_CONSTITUENT_FS[secid];
+  if (!fs) return null;
+  return (
+    (await fetchConstituentsFrom("push2.eastmoney.com", fs, pn, pz)) ??
+    (await fetchConstituentsFrom("push2delay.eastmoney.com", fs, pn, pz))
+  );
 }
 
 /** 北京时间「今天」的日期字符串 YYYY-MM-DD */

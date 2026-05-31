@@ -2,14 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { IndexDetail } from "@/lib/types";
+import type { ConstituentStock, IndexDetail, KlineCandle } from "@/lib/types";
 import { changeColor, cn } from "@/lib/utils";
 import { IndexTrendChart } from "@/components/index-trend-chart";
+import { KlineChart } from "@/components/kline-chart";
 
-const TABS = ["分时", "五日", "日K", "周K", "月K"];
+const TABS: { key: string; label: string; type?: string }[] = [
+  { key: "分时", label: "分时" },
+  { key: "五日", label: "五日", type: "5d" },
+  { key: "日K", label: "日K", type: "d" },
+  { key: "周K", label: "周K", type: "w" },
+  { key: "月K", label: "月K", type: "m" },
+];
 
-/** 成交量(手)/成交额(元) → X.XX亿/万 */
 function yi(v: number): string {
+  if (v >= 1e12) return `${(v / 1e12).toFixed(2)}万亿`;
   if (v >= 1e8) return `${(v / 1e8).toFixed(2)}亿`;
   if (v >= 1e4) return `${(v / 1e4).toFixed(2)}万`;
   return `${v}`;
@@ -24,12 +31,22 @@ function Stat({ label, value, valueClass }: { label: string; value: string; valu
   );
 }
 
+type ChartData = { kind: "line"; line: { time: string; price: number }[] } | { kind: "candle"; candle: KlineCandle[] };
+
 export function IndexDetailView({ secid }: { secid: string }) {
   const router = useRouter();
   const [d, setD] = useState<IndexDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("分时");
+  const [chart, setChart] = useState<ChartData | null>(null);
+  const [chartLoading, setChartLoading] = useState(false);
 
+  const [stocks, setStocks] = useState<ConstituentStock[]>([]);
+  const [stockTotal, setStockTotal] = useState(0);
+  const [stockPage, setStockPage] = useState(1);
+  const [stockLoading, setStockLoading] = useState(false);
+
+  // 行情 + 分时（每 15s 刷新）
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -54,10 +71,93 @@ export function IndexDetailView({ secid }: { secid: string }) {
     };
   }, [secid]);
 
+  // 切到 五日/日K/周K/月K 时拉取对应数据
+  useEffect(() => {
+    const t = TABS.find((x) => x.key === tab)?.type;
+    if (!t) {
+      setChart(null);
+      return;
+    }
+    let cancelled = false;
+    setChartLoading(true);
+    (async () => {
+      try {
+        const r = await fetch(`/api/kline?secid=${encodeURIComponent(secid)}&type=${t}`);
+        if (r.ok && !cancelled) setChart((await r.json()) as ChartData);
+      } catch {
+        // 忽略
+      } finally {
+        if (!cancelled) setChartLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, secid]);
+
+  // 成分股首页
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/constituents?secid=${encodeURIComponent(secid)}&pn=1`);
+        if (!r.ok) return;
+        const j = (await r.json()) as { stocks: ConstituentStock[]; total: number };
+        if (cancelled) return;
+        setStocks(j.stocks);
+        setStockTotal(j.total);
+        setStockPage(1);
+      } catch {
+        // 忽略
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [secid]);
+
+  const loadMoreStocks = async () => {
+    setStockLoading(true);
+    try {
+      const next = stockPage + 1;
+      const r = await fetch(`/api/constituents?secid=${encodeURIComponent(secid)}&pn=${next}`);
+      if (r.ok) {
+        const j = (await r.json()) as { stocks: ConstituentStock[]; total: number };
+        setStocks((prev) => [...prev, ...j.stocks]);
+        setStockPage(next);
+      }
+    } catch {
+      // 忽略
+    } finally {
+      setStockLoading(false);
+    }
+  };
+
   const up = (d?.changePct ?? 0) >= 0;
 
+  function renderChart() {
+    if (tab === "分时") {
+      return d && d.trend.length > 0 ? (
+        <IndexTrendChart trend={d.trend} prevClose={d.prevClose} up={up} />
+      ) : (
+        <Empty>{loading ? "加载中…" : "暂无分时数据"}</Empty>
+      );
+    }
+    if (chartLoading) return <Empty>加载中…</Empty>;
+    if (chart?.kind === "line") {
+      if (chart.line.length === 0) return <Empty>暂无数据</Empty>;
+      const base = chart.line[0]?.price ?? 0;
+      const lineUp = (chart.line[chart.line.length - 1]?.price ?? 0) >= base;
+      return <IndexTrendChart trend={chart.line} prevClose={base} up={lineUp} />;
+    }
+    if (chart?.kind === "candle") {
+      return chart.candle.length > 0 ? <KlineChart data={chart.candle} /> : <Empty>暂无K线数据</Empty>;
+    }
+    return <Empty>暂无数据</Empty>;
+  }
+
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-3xl pb-8">
       <header className="flex items-center gap-3 px-4 py-3">
         <button type="button" onClick={() => router.back()} aria-label="返回" className="text-2xl leading-none text-zinc-500">
           ‹
@@ -93,38 +193,71 @@ export function IndexDetailView({ secid }: { secid: string }) {
           <div className="flex border-y border-zinc-100 dark:border-zinc-800">
             {TABS.map((t) => (
               <button
-                key={t}
+                key={t.key}
                 type="button"
-                onClick={() => setTab(t)}
+                onClick={() => setTab(t.key)}
                 className={cn(
                   "flex-1 py-2.5 text-sm transition-colors",
-                  tab === t
+                  tab === t.key
                     ? "border-b-2 border-blue-500 font-medium text-zinc-900 dark:text-zinc-50"
                     : "text-zinc-400",
                 )}
               >
-                {t}
+                {t.label}
               </button>
             ))}
           </div>
 
-          <section className="px-2 py-3">
-            {tab === "分时" ? (
-              d.trend.length > 0 ? (
-                <IndexTrendChart trend={d.trend} prevClose={d.prevClose} up={up} />
-              ) : (
-                <div className="flex h-[260px] items-center justify-center text-sm text-zinc-400">暂无分时数据</div>
-              )
-            ) : (
-              <div className="flex h-[260px] items-center justify-center text-sm text-zinc-400">{tab} 图即将支持</div>
-            )}
-          </section>
+          <section className="px-2 py-3">{renderChart()}</section>
 
-          <p className="px-4 pb-8 text-center text-[11px] text-zinc-400">
-            行情来自东方财富，每 15 秒刷新 · 成分股 / K 线即将支持
-          </p>
+          {/* 成分股 */}
+          {stocks.length > 0 && (
+            <section className="mt-2">
+              <div className="px-4 pb-1 text-base font-semibold text-zinc-900 dark:text-zinc-50">成分股</div>
+              <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-2 px-4 py-2 text-xs text-zinc-400">
+                <span>股票名称</span>
+                <span className="text-right">最新价</span>
+                <span className="text-right">涨跌幅</span>
+                <span className="text-right">流通市值</span>
+              </div>
+              <ul className="divide-y divide-zinc-50 dark:divide-zinc-800/50">
+                {stocks.map((s) => (
+                  <li key={s.code} className="grid grid-cols-[1.4fr_1fr_1fr_1fr] items-center gap-2 px-4 py-3 text-sm">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-zinc-900 dark:text-zinc-100">{s.name}</div>
+                      <div className="mt-0.5 text-xs text-zinc-400">{s.code}</div>
+                    </div>
+                    <div className={cn("text-right font-semibold tabular-nums", changeColor(s.changePct))}>
+                      {s.price.toFixed(2)}
+                    </div>
+                    <div className={cn("text-right font-semibold tabular-nums", changeColor(s.changePct))}>
+                      {s.changePct >= 0 ? "+" : ""}
+                      {s.changePct.toFixed(2)}%
+                    </div>
+                    <div className="text-right tabular-nums text-zinc-600 dark:text-zinc-400">{yi(s.floatCap)}</div>
+                  </li>
+                ))}
+              </ul>
+              {stocks.length < stockTotal && (
+                <button
+                  type="button"
+                  onClick={loadMoreStocks}
+                  disabled={stockLoading}
+                  className="w-full py-3 text-center text-sm text-blue-600 disabled:opacity-50 dark:text-blue-400"
+                >
+                  {stockLoading ? "加载中…" : "查看更多 ›"}
+                </button>
+              )}
+            </section>
+          )}
+
+          <p className="px-4 pt-2 text-center text-[11px] text-zinc-400">行情来自东方财富，每 15 秒刷新 · 仅供参考</p>
         </>
       )}
     </div>
   );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="flex h-[260px] items-center justify-center text-sm text-zinc-400">{children}</div>;
 }
