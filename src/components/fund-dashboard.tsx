@@ -296,7 +296,7 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
               </span>
             )}
           </div>
-          <p className="text-sm text-zinc-500">数据来自天天基金 · 技术指标方向研判 · 手机/电脑自适应</p>
+          <p className="text-sm text-zinc-500">数据来自天天基金 · 技术指标方向研判</p>
         </div>
         <button
           type="button"
