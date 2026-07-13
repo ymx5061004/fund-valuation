@@ -1,6 +1,9 @@
+import type { Metadata } from "next";
 import { getDashboardFunds } from "@/lib/data";
 import { FundDashboard } from "@/components/fund-dashboard";
 import { IndexBar } from "@/components/index-bar";
+
+export const metadata: Metadata = { title: "行情" };
 
 // 行情 Tab：大盘指数 + 热门榜 + 涨跌预测仪表盘
 export const revalidate = 30;

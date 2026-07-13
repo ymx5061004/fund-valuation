@@ -23,7 +23,7 @@
 - **dev 端口**：旧 `next dev` 进程没杀干净会占用 3000，新进程跳到 3001 并退出；构建/重启前先释放 3000。
 - **dev 异常 404**：反复 build/dev 切换可能让 `.next` 缓存错乱、已有路由全 404；`rm -rf .next` 重启即可。
 - **「最新净值」统一取历史净值(pingzhongdata)最新点**（`buildFund`/`fetchQuoteMetrics` 用 `lastNav`）；**不要用 gz 接口的 `dwjz`**（会滞后一天，导致行情/自选/历史口径对不上）。行情实时轮询也不覆盖 nav。
-- **估值涨幅(estimateChangePct) = 估值相对「最新净值」重算**(`(estimateNav-lastNav)/lastNav`)，**不要直接用 gz 的 gszzl**：gszzl 相对 gz 自己的 dwjz(可能滞后一天)，会出现「估值>最新净值却显示负涨幅」的符号矛盾(用户看到会觉得错)。重算后 估值/净值/涨幅 三者自洽；交易时段 dwjz=最新净值，重算≈gszzl。（注：当日涨幅 dayChangePct 仍是确认涨幅，与盘中估值是两个不同列。）
+- **盘中估值(estimateNav/estimateChangePct) = 天天基金原始估值(gsz+gszzl)，不要改成相对最新净值重算**（历史上反复改过：45dec8a 曾改为重算 → 23d0cd0 **用户明确要求改回原始估值**——盘中估值是预估值，不应等于/锚定真实净值）。gszzl 相对 gz 自己的 dwjz 计算，可能与最新净值口径有一天偏差，这是接口特性、按原样展示。**当日涨幅 dayChangePct 是另一列**：已结算日用官方确认涨幅（最新两笔净值），未结算的交易日用估值涨幅并标「估」（dayEstimated）。
 
 ## 数据来源（天天基金 / 东方财富公开接口，**非官方**）
 
@@ -43,32 +43,53 @@
 src/
 ├─ app/
 │  ├─ page.tsx              首页 = 持有页（渲染 HoldingsView）
-│  ├─ market/page.tsx       行情页（async + revalidate=30 ISR，渲染 FundDashboard）
-│  ├─ watchlist|news|member|me/page.tsx  占位页（ComingSoon）
-│  ├─ layout.tsx            根布局（lang=zh-CN、metadata、viewport、底部 TabBar）
-│  ├─ globals.css           Tailwind v4 + 主题色 + 中文字体回退
+│  ├─ market/page.tsx       行情页（async + revalidate=30 ISR，渲染 FundDashboard）+ loading.tsx 骨架
+│  ├─ watchlist/page.tsx    自选页（WatchlistView）
+│  ├─ news/page.tsx         资讯页（NewsView：要闻 + 7×24 快讯）
+│  ├─ me/page.tsx           我的=设置页（MeView：主题切换/本地数据管理/备份导入导出/关于）
+│  ├─ member/page.tsx       占位页（ComingSoon，会员需自建后端暂不做）
+│  ├─ fund/[code]/page.tsx  基金详情（generateMetadata 取基金名；非 6 位代码 notFound）
+│  ├─ index/[secid]/page.tsx 指数详情（secid 校验 notFound）
+│  ├─ layout.tsx            根布局（title template、themeColor、防主题闪烁内联脚本、底部 TabBar）
+│  ├─ globals.css           Tailwind v4 + 主题色（.dark class 驱动）+ 中文字体回退
+│  ├─ error.tsx / not-found.tsx  全局错误边界 / 404
+│  ├─ manifest.ts / robots.ts / icon.png / apple-icon.png  PWA + SEO
 │  └─ api/
 │     ├─ funds/             GET 全量（真实优先+mock兜底）
-│     ├─ estimate/          GET ?codes= 轻量实时估值（供客户端轮询，no-store）
+│     ├─ estimate/          GET ?codes= 轻量实时估值（供客户端轮询，no-store；去重+校验+并发池）
+│     ├─ quotes/            GET ?codes= 多指标行情（自选/持有/详情用；上游全挂返回 503）
 │     ├─ fund/              GET ?code= 单只完整数据（搜索添加用）
-│     ├─ search/            GET ?key= 基金搜索
-│     └─ popular/           GET ?sort=&limit= 排行榜热门
+│     ├─ search/            GET ?key= 基金搜索（key 截断 32、走 1h 缓存）
+│     ├─ popular/           GET ?sort=&limit= 排行榜热门
+│     ├─ news/              GET ?tab=list|fast 资讯（要闻分页 / 快讯 sortEnd 翻页）
+│     └─ index|indices|kline|constituents/  指数详情/指数条/K线/成分股（secid 格式校验）
 ├─ lib/
-│  ├─ types.ts              领域类型（Fund/NavPoint/Prediction/FundMeta/RankSort 等）
-│  ├─ eastmoney.ts          ★服务端数据层：实时估值/历史/搜索/排行榜抓取与解析
+│  ├─ types.ts              领域类型（Fund/NavPoint/Prediction/QuoteMetrics/IndexDetail 等）
+│  ├─ eastmoney.ts          ★服务端数据层：估值/历史/搜索/排行/指数/K线（全部走 emFetch 带超时；parseCodes/mapWithLimit/SECID_RE 也在这）
+│  ├─ news.ts               资讯数据层（东财要闻 getNewsByColumns + 7×24 getFastNewsList）
 │  ├─ data.ts               getDashboardFunds：真实数据优先，失败回退 mock
 │  ├─ prediction.ts         ★预测「信号引擎」（可替换，见下）
 │  ├─ backtest.ts           ★回测（look-ahead 安全：方向命中率 + 信号策略 vs 持有）
 │  ├─ mock-data.ts          演示假数据（种子随机，可复现）；TRACKED_FUNDS 兜底代码也在 eastmoney.ts
-│  ├─ use-local-storage.ts  SSR 安全的 localStorage 钩子
+│  ├─ use-local-storage.ts  SSR 安全的 localStorage 钩子（返回 [value,set,loaded] 三元组）
+│  ├─ use-polling.ts        可见性感知轮询钩子 + isAShareTradingTime（隐藏暂停、非交易时段降频）
+│  ├─ theme.ts              主题偏好钩子（fv.theme：system/light/dark，配合 layout 防闪烁脚本）
 │  └─ utils.ts              cn / 格式化 / 红涨绿跌配色
 └─ components/
-   ├─ fund-dashboard.tsx    ★编排（'use client'）：选中态/筛选/自选/持仓/实时刷新/热门榜/搜索
+   ├─ fund-dashboard.tsx    ★行情页编排（'use client'）：选中态/筛选/自选/持仓/实时刷新/热门榜/搜索
+   ├─ holdings-view.tsx     持有页（/api/quotes 口径的当日收益，30s 轮询）
+   ├─ watchlist-view.tsx    自选页（横向滚动表、三态排序、增量合并防清空）
+   ├─ fund-detail.tsx       基金详情（持仓卡/编辑持有/预测+回测/30s 轮询）
+   ├─ index-detail.tsx      指数详情（分时/五日/日周月K + 成分股，交易时段感知轮询）
+   ├─ index-bar.tsx / index-trend-chart.tsx / kline-chart.tsx  指数条 / 分时图(A股固定241格全天轴) / K线(中文tooltip)
+   ├─ news-view.tsx         资讯页（要闻/快讯 Tab、加载更多、快讯 60s 自动刷新）
+   ├─ me-view.tsx           设置页（主题三态/数据清除/备份导出导入）
    ├─ fund-list.tsx         列表：PC 表格 / 手机卡片自适应 + ☆收藏
-   ├─ fund-search.tsx       搜索框（防抖、下拉、点选添加）
+   ├─ fund-search.tsx       搜索框（防抖+防竞态、下拉、点选添加）
    ├─ fund-toolbar.tsx      搜索/类型筛选/排序/只看自选
+   ├─ import-sheet.tsx      持仓手动导入/编辑底部弹层
    ├─ nav-chart.tsx         ECharts 净值图（'use client'，ResizeObserver 自适应）
-   ├─ prediction-panel.tsx  涨跌预测面板（含免责声明）
+   ├─ prediction-panel.tsx / backtest-panel.tsx  涨跌预测 / 回测面板（含免责声明）
    ├─ holdings-calculator.tsx 持仓收益估算
    └─ ui/{card,badge}.tsx   基础组件 + SignalBadge
 ```
@@ -91,19 +112,26 @@ src/
   **横向滚动表格**：名称列 sticky 固定，指标列右滑——当日涨幅(确认涨幅+净值，堆叠) / 盘中估值(估算涨幅+估算净值，堆叠) / 本周 / 本月 / 今年 / 近一年。
   数据走 **`/api/quotes`**（`fetchQuoteMetrics`：周/月/今年/近一年按历史净值相对最新净值日计算；**当日涨幅 `dayChangePct`**=当「估值日(gztime)=今天且新于最新净值日」(今日净值未公布)时用估值涨幅并置 `dayEstimated=true`(UI 显示小「估」)、否则用最新两笔净值的官方确认涨幅 —— 已与养基宝截图逐项对齐)，每 30s 刷新；可搜索添加、点 ★ 移除、按当日涨幅排序、**点行进入 /fund/[code] 详情**。
   注：「关联板块」「重仓均涨幅」需养基宝自建数据，天天基金接口拿不到，未做（第二列改显盘中估值）。
-  **盘中估值 = 估值净值 + 估值相对最新净值的涨跌(重算)**，始终显示（`estimateFresh`=有估值数据；仅无估值数据时显示「--」）。
+  **盘中估值 = 天天基金原始估值(gsz 估值净值 + gszzl 估值涨幅)**（23d0cd0 用户明确，是预估值、与当日确认涨幅区分），始终显示（`estimateFresh`=有估值数据；仅无估值数据时显示「--」）。
 - **/fund/[code]（基金详情）** = `FundDetail`（全屏，`/fund/` 下隐藏底部 TabBar，有自己的底部操作栏）。取 `/api/fund`(净值历史) + `/api/quotes`(指标)。头部：名称 + 当日涨幅(带「估」) + 最新净值 + 近一年；区间收益(本周/本月/今年/近一年)；净值走势图(NavChart `zoomStart=0`)+周期(近1月/3月/6月/1年)；净值历史表(日期/净值/日涨幅)；底部「加/删自选」+「添加持有」(ImportSheet 的 `presetFund` 预选本基金)。
-- **/news /member /me** = 占位页（`ComingSoon`），待做。
+- **/news（资讯）** = `NewsView`。要闻（`np-listapi` column=350，分页「加载更多」）+ 7×24 快讯（`np-weblist` getFastNewsList，sortEnd 翻页、60s 自动刷新、titleColor>0 标红）双 Tab；数据层在 `lib/news.ts`，走 `/api/news` 代理；点击外链新窗口打开东财原文。
+- **/me（我的）** = `MeView` 设置页。外观三态切换（跟随系统/浅色/深色，存 `fv.theme`，暗色为 `.dark` class 驱动 + layout 防闪烁内联脚本，**别改回 media 查询方案**）；本地数据管理（4 个 fv.* 的条数展示/分项清除/JSON 备份导出导入）；关于与免责声明。
+- **/member** = 占位页（`ComingSoon`）。会员体系需自建后端，公开接口帮不上，暂不做。
 
-> ⚠️ **涨跌预测 + 历史回测是「保留功能」，后续还要用**（现位于 /market 行情页）。重构或调整布局时**切勿删除** `prediction.ts` / `backtest.ts` / `PredictionPanel` / `BacktestPanel`，也不要把它们从 /market 里移除。
+> ⚠️ **涨跌预测 + 历史回测是「保留功能」，后续还要用**（现位于 /market 行情页与 /fund/[code] 详情页）。重构或调整布局时**切勿删除** `prediction.ts` / `backtest.ts` / `PredictionPanel` / `BacktestPanel`，也不要把它们从 /market 里移除。
 
 ## 开发 / 部署 / Git
 
 - `npm run dev`（开发） / `npm run build`（= Vercel 的构建命令，提交前务必跑通：含 TS 类型检查 + lint）。
-- 部署：GitHub 仓库导入 Vercel，零配置；**Vercel 海外区访问国内接口可能慢**，可在 `vercel.json` 设 `regions: ["hkg1"]`（待办）。
+- 部署：GitHub 仓库导入 Vercel；`vercel.json` 已设 `regions: ["hkg1"]`（函数落香港区，就近访问国内接口）。
 - 远程仓库：`github.com/ymx5061004/fund-valuation`（分支 main）。
 - **提交身份**：作者用 `ymx5061004 <ymx5061004@163.com>`（本地 git config 已设），保留 `Co-Authored-By: Claude` 标记。别再用 admin@dl-rw.com（会错误归属到 dalianRW 账号）。
 
 ## 待办 / 可继续
 
-- `vercel.json` 设香港区并部署；排行榜 A/C 份额去重；预测信号回测；暗色模式手动切换；基金详情独立路由 `/fund/[code]`。
+- /member 会员页（需自建后端，或降级为「工具」Tab：定投/摊薄计算器）。
+- 持仓截图 OCR 导入（ImportSheet 已留占位 Tab，用户暂定先不接）。
+- 自选列表拖拽排序/置顶（现有 自选顺序/涨幅升降 三态排序）。
+- 指数详情页「相关指数基金」联动（secid → 跟踪基金，可用 searchFunds 或静态映射）。
+- ECharts 图表跟随 .dark 主题重绘（当前用中性色两种主题下均可读，tooltip 始终浅底）。
+- 手动切换主题时用 JS 同步 <meta name="theme-color">（现只跟系统偏好）。
