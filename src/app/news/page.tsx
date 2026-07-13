@@ -1,5 +1,8 @@
-import { ComingSoon } from "@/components/coming-soon";
+import type { Metadata } from "next";
+import { NewsView } from "@/components/news-view";
+
+export const metadata: Metadata = { title: "资讯" };
 
 export default function Page() {
-  return <ComingSoon title="资讯" />;
+  return <NewsView />;
 }
