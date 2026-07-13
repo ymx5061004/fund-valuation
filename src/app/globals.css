@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
+/* 暗色改为 .dark class 驱动（支持手动切换）：
+   layout.tsx 的防闪烁脚本按 localStorage('fv.theme') / 系统偏好 给 <html> 加 .dark */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #fafafa;
   --foreground: #18181b;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -14,11 +19,10 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #09090b;
-    --foreground: #ededed;
-  }
+.dark {
+  --background: #09090b;
+  --foreground: #ededed;
+  color-scheme: dark;
 }
 
 body {
