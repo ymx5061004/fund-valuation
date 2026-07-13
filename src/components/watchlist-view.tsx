@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { FundMeta, QuoteMetrics } from "@/lib/types";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
 import { FundSearch } from "@/components/fund-search";
+
+/** 排序模式：custom=自选添加顺序（可稳定盯盘），desc/asc=按当日涨幅 */
+type SortMode = "custom" | "desc" | "asc";
+const SORT_NEXT: Record<SortMode, SortMode> = { custom: "desc", desc: "asc", asc: "custom" };
+const SORT_ICON: Record<SortMode, string> = { custom: "⇅", desc: "▼", asc: "▲" };
 
 function starColor(chg: number | undefined): string {
   if (chg == null) return "text-zinc-300 dark:text-zinc-600";
@@ -25,9 +30,11 @@ const METRIC_CELL = "px-3 py-3.5 text-right text-sm tabular-nums whitespace-nowr
 
 export function WatchlistView() {
   const router = useRouter();
-  const [watch, setWatch] = useLocalStorage<string[]>("fv.watchlist", []);
+  const [watch, setWatch, loaded] = useLocalStorage<string[]>("fv.watchlist", []);
   const [metrics, setMetrics] = useState<Record<string, QuoteMetrics>>({});
-  const [sortDesc, setSortDesc] = useState(true);
+  const [sortMode, setSortMode] = useState<SortMode>("custom");
+  // 防轮询乱序：只应用最后一次请求的结果
+  const reqIdRef = useRef(0);
 
   const codesParam = useMemo(() => watch.join(","), [watch]);
 
@@ -37,24 +44,25 @@ export function WatchlistView() {
       setMetrics({});
       return;
     }
-    let cancelled = false;
     const load = async () => {
+      const reqId = ++reqIdRef.current;
       try {
         const r = await fetch(`/api/quotes?codes=${codesParam}`);
-        if (!r.ok) return;
+        if (!r.ok) return; // 503（上游故障）等直接跳过，保留已展示数据
         const j = (await r.json()) as { data: QuoteMetrics[] };
-        if (cancelled) return;
+        if (reqId !== reqIdRef.current) return;
         const map: Record<string, QuoteMetrics> = {};
         for (const m of j.data) map[m.code] = m;
-        setMetrics(map);
+        // 增量合并：部分基金失败时不把整表清成「--」
+        setMetrics((prev) => ({ ...prev, ...map }));
       } catch {
-        // 忽略
+        // 忽略，30s 后下一轮自愈
       }
     };
     void load();
     const id = setInterval(load, 30000);
     return () => {
-      cancelled = true;
+      reqIdRef.current++;
       clearInterval(id);
     };
   }, [codesParam]);
@@ -64,13 +72,15 @@ export function WatchlistView() {
 
   const rows = useMemo(() => {
     const list = watch.map((code) => ({ code, m: metrics[code] as QuoteMetrics | undefined }));
-    list.sort((a, b) => {
-      const av = a.m?.dayChangePct ?? -Infinity;
-      const bv = b.m?.dayChangePct ?? -Infinity;
-      return sortDesc ? bv - av : av - bv;
-    });
+    if (sortMode !== "custom") {
+      list.sort((a, b) => {
+        const av = a.m?.dayChangePct ?? -Infinity;
+        const bv = b.m?.dayChangePct ?? -Infinity;
+        return sortMode === "desc" ? bv - av : av - bv;
+      });
+    }
     return list;
-  }, [watch, metrics, sortDesc]);
+  }, [watch, metrics, sortMode]);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -90,7 +100,14 @@ export function WatchlistView() {
         <FundSearch onAdd={add} adding={false} />
       </div>
 
-      {watch.length === 0 ? (
+      {!loaded ? (
+        /* 本地数据未读出前显示中性占位，避免有自选的用户首帧闪「暂无自选」 */
+        <div className="mt-3 flex flex-col gap-3 px-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="h-12 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />
+          ))}
+        </div>
+      ) : watch.length === 0 ? (
         <div className="flex flex-col items-center px-4 pt-20 text-center">
           <div className="text-sm text-zinc-400">暂无自选</div>
           <p className="mt-2 max-w-xs text-xs leading-relaxed text-zinc-400">
@@ -108,8 +125,13 @@ export function WatchlistView() {
                     基金名称
                   </th>
                   <th className={cn(METRIC_HEAD, "border-b border-zinc-100 dark:border-zinc-800")}>
-                    <button type="button" onClick={() => setSortDesc((v) => !v)} className="inline-flex items-center gap-0.5">
-                      当日涨幅 <span className="text-[10px]">{sortDesc ? "▼" : "▲"}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSortMode((v) => SORT_NEXT[v])}
+                      title={sortMode === "custom" ? "自选顺序（点击按涨幅排序）" : "按当日涨幅排序（点击切换）"}
+                      className="inline-flex items-center gap-0.5"
+                    >
+                      当日涨幅 <span className="text-[10px]">{SORT_ICON[sortMode]}</span>
                     </button>
                   </th>
                   {["盘中估值", "本周", "本月", "今年", "近一年"].map((h) => (

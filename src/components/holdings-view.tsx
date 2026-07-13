@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { Position, Quote } from "@/lib/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Position, QuoteMetrics } from "@/lib/types";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { changeColor, cn, formatNav, formatPct } from "@/lib/utils";
 import { ImportSheet } from "@/components/import-sheet";
@@ -12,43 +12,51 @@ function money(v: number, sign = false): string {
 }
 
 export function HoldingsView() {
-  const [positions, setPositions] = useLocalStorage<Position[]>("fv.positions", []);
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
+  const [positions, setPositions, loaded] = useLocalStorage<Position[]>("fv.positions", []);
+  const [quotes, setQuotes] = useState<Record<string, QuoteMetrics>>({});
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<Position | null>(null);
+  // 防轮询乱序：只应用最后一次请求的结果
+  const reqIdRef = useRef(0);
 
   const codesParam = useMemo(() => positions.map((p) => p.code).join(","), [positions]);
 
-  // 拉取持仓基金的实时估值
+  // 持仓行情走 /api/quotes（dayNav/dayChangePct 与自选/详情同口径；
+  // 不能用 /api/estimate 的 dwjz——它可能滞后一天，会把昨日涨幅重复计入当日收益），每 30s 刷新
   useEffect(() => {
     if (!codesParam) {
       setQuotes({});
       return;
     }
-    let cancelled = false;
-    (async () => {
+    const load = async () => {
+      const reqId = ++reqIdRef.current;
       try {
-        const r = await fetch(`/api/estimate?codes=${codesParam}`);
+        const r = await fetch(`/api/quotes?codes=${codesParam}`);
         if (!r.ok) return;
-        const j = (await r.json()) as { data: Quote[] };
-        if (cancelled) return;
-        const map: Record<string, Quote> = {};
+        const j = (await r.json()) as { data: QuoteMetrics[] };
+        if (reqId !== reqIdRef.current) return;
+        const map: Record<string, QuoteMetrics> = {};
         for (const q of j.data) map[q.code] = q;
-        setQuotes(map);
+        // 增量合并：部分失败/瞬时全挂时保留已展示数据，不整表清空
+        setQuotes((prev) => ({ ...prev, ...map }));
       } catch {
-        // 忽略
+        // 忽略，30s 后下一轮自愈
       }
-    })();
+    };
+    void load();
+    const id = setInterval(load, 30000);
     return () => {
-      cancelled = true;
+      reqIdRef.current++;
+      clearInterval(id);
     };
   }, [codesParam]);
 
   const rows = positions.map((p) => {
     const q = quotes[p.code];
-    const cur = q ? q.estimateNav : p.cost; // 无行情时退化为成本，避免 NaN
+    const cur = q ? q.dayNav : p.cost; // 无行情时退化为成本，避免 NaN；dayNav=估算时估值、结算后最新净值
     const marketValue = p.shares * cur;
-    const todayPnL = q ? p.shares * (q.estimateNav - q.nav) : 0;
+    // 当日收益 = 份额 ×（当日净值 − 前收净值），由 dayNav 与 dayChangePct 反推前收，两种口径统一
+    const todayPnL = q && q.dayChangePct > -100 ? p.shares * (q.dayNav - q.dayNav / (1 + q.dayChangePct / 100)) : 0;
     const holdPnL = p.shares * (cur - p.cost);
     const holdPnLPct = p.cost > 0 ? ((cur - p.cost) / p.cost) * 100 : 0;
     return { p, q, marketValue, todayPnL, holdPnL, holdPnLPct };
@@ -119,7 +127,14 @@ export function HoldingsView() {
         </div>
       </section>
 
-      {positions.length === 0 ? (
+      {!loaded ? (
+        /* 本地数据未读出前显示中性占位，避免有持仓的用户首帧闪「暂无基金」 */
+        <div className="flex flex-col gap-3 px-4 pt-6">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="h-14 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />
+          ))}
+        </div>
+      ) : positions.length === 0 ? (
         /* 空态 */
         <div className="flex flex-col items-center px-4 pt-16">
           <div className="text-sm text-zinc-400">暂无基金</div>
@@ -159,7 +174,14 @@ export function HoldingsView() {
                   </div>
                   <div className={cn("text-right text-sm font-semibold tabular-nums", changeColor(r.todayPnL))}>
                     {money(r.todayPnL, true)}
-                    <div className="text-xs font-normal text-zinc-400">{r.q ? formatPct(r.q.estimateChangePct) : "--"}</div>
+                    <div className="text-xs font-normal text-zinc-400">
+                      {r.q ? formatPct(r.q.dayChangePct) : "--"}
+                      {r.q?.dayEstimated && (
+                        <span className="ml-0.5 rounded bg-zinc-100 px-0.5 text-[9px] text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">
+                          估
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className={cn("text-right text-sm font-semibold tabular-nums", changeColor(r.holdPnL))}>
                     {money(r.holdPnL, true)}

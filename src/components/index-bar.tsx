@@ -1,33 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import type { IndexQuote } from "@/lib/types";
 import { changeColor, cn } from "@/lib/utils";
+import { isAShareTradingTime, usePolling } from "@/lib/use-polling";
 
-/** 大盘指数横向滚动条（A股 + 港股 + 美股 + 日经，红涨绿跌，每 15s 刷新）。 */
+/** 大盘指数横向滚动条（A股 + 港股 + 美股 + 日经，红涨绿跌）。
+ *  A 股交易时段每 15s 刷新；其余时段降频到 90s（兼顾港/美盘），标签页隐藏时暂停。 */
 export function IndexBar() {
   const [indices, setIndices] = useState<IndexQuote[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
+  usePolling(
+    async () => {
       try {
         const r = await fetch("/api/indices");
         if (!r.ok) return;
         const j = (await r.json()) as { data: IndexQuote[] };
-        if (!cancelled) setIndices(j.data);
+        if (j.data.length > 0) setIndices(j.data);
       } catch {
         // 忽略
       }
-    };
-    void load();
-    const id = setInterval(load, 15000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
+    },
+    { activeMs: 15000, idleMs: 90000, isActive: isAShareTradingTime },
+  );
 
   if (indices.length === 0) return null;
 

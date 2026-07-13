@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
  * 与 localStorage 同步的状态钩子。
  * SSR 安全：首次渲染用 initial（服务端/客户端一致，避免注水不一致），
  * 挂载后再从 localStorage 读取真实值并写回。
+ * 返回 [value, setValue, loaded]：loaded=false 表示还没读到本地真实值，
+ * 消费方应显示中性占位而非「暂无」空态（避免有数据的用户首帧闪空态）。
  */
 export function useLocalStorage<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(initial);
@@ -30,5 +32,5 @@ export function useLocalStorage<T>(key: string, initial: T) {
     }
   }, [key, value, loaded]);
 
-  return [value, setValue] as const;
+  return [value, setValue, loaded] as const;
 }

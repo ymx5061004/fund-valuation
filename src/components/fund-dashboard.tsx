@@ -77,12 +77,16 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
+    let seq = 0; // 防乱序：慢响应回来时若已有更新的请求发出，丢弃本次结果
+    let applied = 0;
     const poll = async () => {
+      const mySeq = ++seq;
       try {
         const res = await fetch(`/api/estimate?codes=${codesParam}`);
         if (!res.ok) return;
         const json = (await res.json()) as { data: EstimateDTO[]; updatedAt: string };
-        if (cancelled) return;
+        if (cancelled || mySeq < applied) return;
+        applied = mySeq;
         const map = new Map(json.data.map((e) => [e.code, e]));
         setFunds((prev) =>
           prev.map((f) => {

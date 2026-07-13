@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ConstituentStock, IndexDetail, KlineCandle } from "@/lib/types";
 import { changeColor, cn } from "@/lib/utils";
+import { isAShareTradingTime, usePolling } from "@/lib/use-polling";
 import { IndexTrendChart } from "@/components/index-trend-chart";
 import { KlineChart } from "@/components/kline-chart";
 
@@ -46,30 +47,49 @@ export function IndexDetailView({ secid }: { secid: string }) {
   const [stockPage, setStockPage] = useState(1);
   const [stockLoading, setStockLoading] = useState(false);
 
-  // 行情 + 分时（每 15s 刷新）
+  const reqIdRef = useRef(0);
+  // 连续拿不到数据（无效 secid/上游故障）时退避，不再 15s 无限重试
+  const failCountRef = useRef(0);
+
   useEffect(() => {
-    let cancelled = false;
     setLoading(true);
-    const load = async () => {
+    setD(null);
+    failCountRef.current = 0;
+    reqIdRef.current++;
+  }, [secid]);
+
+  const isAShare = secid.startsWith("0.") || secid.startsWith("1.");
+  const pollActive = useCallback(
+    () => failCountRef.current < 3 && (!isAShare || isAShareTradingTime()),
+    [isAShare],
+  );
+
+  // 行情 + 分时：交易时段 15s 刷新；非交易时段/连续失败降频到 5 分钟；标签页隐藏时暂停
+  usePolling(
+    async () => {
+      const reqId = ++reqIdRef.current;
       try {
         const r = await fetch(`/api/index?secid=${encodeURIComponent(secid)}`);
         if (r.ok) {
           const j = (await r.json()) as { data: IndexDetail | null };
-          if (!cancelled) setD(j.data);
+          if (reqId !== reqIdRef.current) return;
+          if (j.data) {
+            failCountRef.current = 0;
+            setD(j.data);
+          } else {
+            failCountRef.current++;
+          }
+        } else if (reqId === reqIdRef.current) {
+          failCountRef.current++;
         }
       } catch {
-        // 忽略
+        failCountRef.current++;
       } finally {
-        if (!cancelled) setLoading(false);
+        if (reqId === reqIdRef.current) setLoading(false);
       }
-    };
-    void load();
-    const id = setInterval(load, 15000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [secid]);
+    },
+    { activeMs: 15000, idleMs: 300000, isActive: pollActive, key: secid },
+  );
 
   // 切到 五日/日K/周K/月K 时拉取对应数据
   useEffect(() => {
@@ -80,6 +100,8 @@ export function IndexDetailView({ secid }: { secid: string }) {
     }
     let cancelled = false;
     setChartLoading(true);
+    // 先清掉上一周期的数据：请求失败时兜底到「暂无数据」，而不是把周K蜡烛渲染在日K Tab 下
+    setChart(null);
     (async () => {
       try {
         const r = await fetch(`/api/kline?secid=${encodeURIComponent(secid)}&type=${t}`);
@@ -123,7 +145,11 @@ export function IndexDetailView({ secid }: { secid: string }) {
       const r = await fetch(`/api/constituents?secid=${encodeURIComponent(secid)}&pn=${next}`);
       if (r.ok) {
         const j = (await r.json()) as { stocks: ConstituentStock[]; total: number };
-        setStocks((prev) => [...prev, ...j.stocks]);
+        // 涨跌幅榜是实时排序，翻页间排名漂移会让下一页含已展示的股票——按 code 去重防重复 key
+        setStocks((prev) => {
+          const seen = new Set(prev.map((s) => s.code));
+          return [...prev, ...j.stocks.filter((s) => !seen.has(s.code))];
+        });
         setStockPage(next);
       }
     } catch {
@@ -138,7 +164,8 @@ export function IndexDetailView({ secid }: { secid: string }) {
   function renderChart() {
     if (tab === "分时") {
       return d && d.trend.length > 0 ? (
-        <IndexTrendChart trend={d.trend} prevClose={d.prevClose} up={up} />
+        // A 股分时用固定 9:30-15:00 全天轴（右侧留白表示未走完的交易时间）
+        <IndexTrendChart trend={d.trend} prevClose={d.prevClose} up={up} fullDaySession={isAShare} />
       ) : (
         <Empty>{loading ? "加载中…" : "暂无分时数据"}</Empty>
       );
@@ -251,7 +278,7 @@ export function IndexDetailView({ secid }: { secid: string }) {
             </section>
           )}
 
-          <p className="px-4 pt-2 text-center text-[11px] text-zinc-400">行情来自东方财富，每 15 秒刷新 · 仅供参考</p>
+          <p className="px-4 pt-2 text-center text-[11px] text-zinc-400">行情来自东方财富，交易时段每 15 秒刷新 · 仅供参考</p>
         </>
       )}
     </div>

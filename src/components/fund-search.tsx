@@ -15,20 +15,24 @@ export function FundSearch({ onAdd, adding }: Props) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
+  // 防竞态：防抖只拦住未发出的请求，已发出的慢响应仍可能晚于新响应到达
+  const reqIdRef = useRef(0);
 
   // 防抖搜索
   useEffect(() => {
     const key = query.trim();
     if (!key) {
+      reqIdRef.current++;
       setResults([]);
       setLoading(false);
       return;
     }
     setLoading(true);
     const timer = setTimeout(async () => {
+      const reqId = ++reqIdRef.current;
       try {
         const res = await fetch(`/api/search?key=${encodeURIComponent(key)}`);
-        if (res.ok) {
+        if (res.ok && reqId === reqIdRef.current) {
           const json = (await res.json()) as { data: FundMeta[] };
           setResults(json.data);
           setOpen(true);
@@ -36,7 +40,7 @@ export function FundSearch({ onAdd, adding }: Props) {
       } catch {
         // 忽略
       } finally {
-        setLoading(false);
+        if (reqId === reqIdRef.current) setLoading(false);
       }
     }, 300);
     return () => clearTimeout(timer);

@@ -37,7 +37,25 @@ export function KlineChart({ data }: { data: KlineCandle[] }) {
       {
         animationDuration: 300,
         grid: { left: 8, right: 8, top: 16, bottom: 40, containLabel: true },
-        tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+        tooltip: {
+          trigger: "axis",
+          axisPointer: { type: "cross" },
+          // 自定义中文 tooltip：ECharts 蜡烛图默认的 open/close/lowest/highest 是硬编码英文
+          formatter: (params: { dataIndex: number }[]) => {
+            const i = params[0]?.dataIndex;
+            const d = data[i];
+            if (!d) return "";
+            const prevClose = i > 0 ? data[i - 1].close : d.open;
+            const pct = prevClose > 0 ? ((d.close - prevClose) / prevClose) * 100 : 0;
+            const pctColor = pct >= 0 ? RED : GREEN;
+            return (
+              `${d.date}<br/>` +
+              `开 ${d.open.toFixed(2)}　收 ${d.close.toFixed(2)}<br/>` +
+              `高 ${d.high.toFixed(2)}　低 ${d.low.toFixed(2)}<br/>` +
+              `涨跌幅 <span style="color:${pctColor}">${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%</span>`
+            );
+          },
+        },
         xAxis: {
           type: "category",
           data: dates,
