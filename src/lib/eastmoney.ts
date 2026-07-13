@@ -22,6 +22,39 @@ const HEADERS = {
   Referer: "https://fund.eastmoney.com/",
 };
 
+/** 基金代码/指数 secid 校验：所有拼进上游 URL 的入参先过这里，防止路径注入与无效请求 */
+const FUND_CODE_RE = /^\d{6}$/;
+export const SECID_RE = /^\d{1,3}\.[A-Za-z0-9]{1,10}$/;
+
+/** 统一的上游抓取：所有 fetch 必须带超时（上游 TCP 挂起时 try/catch 抓不到，会拖死轮询接口）。
+ *  有备用主机的调用传 ~3000ms 便于及时回退，其余默认 5000ms。 */
+function emFetch(url: string, init: RequestInit & { next?: { revalidate: number } }, timeoutMs = 5000) {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+}
+
+/** 并发池：分批执行，防止单个请求对上游瞬时发出上百个连接（招致限流）。 */
+export async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    const batch = items.slice(i, i + limit);
+    results.push(...(await Promise.all(batch.map(fn))));
+  }
+  return results;
+}
+
+/** 接口偶发返回 "-"（停牌/未开盘）等非数值，统一转 0 防 NaN 渗透 */
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** 解析 ?codes= 参数：去重 + 过滤非法代码 + 截断（顺序不能反：先截断会让非法项挤占配额） */
+export function parseCodes(raw: string | null, max = 50): string[] {
+  return Array.from(new Set((raw ?? "").split(",").map((c) => c.trim())))
+    .filter((c) => FUND_CODE_RE.test(c))
+    .slice(0, max);
+}
+
 /** 跟踪的基金（真实代码）。type / manager 在此维护，名称与净值/估值来自接口。 */
 export interface TrackedFund {
   code: string;
@@ -65,11 +98,14 @@ interface GzPayload {
 
 /** 拉取实时估值。fresh=true 时不走缓存（供客户端轮询的接口使用）。 */
 export async function fetchEstimate(code: string, fresh = false): Promise<Estimate | null> {
+  if (!FUND_CODE_RE.test(code)) return null;
   try {
-    const url = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`;
+    // rt 防缓存参数只能加在 fresh 分支：Next 数据缓存以完整 URL 为 key，
+    // 缓存路径带 rt=Date.now() 会让 revalidate:30 永远 miss 且缓存条目无限增长
+    const base = `https://fundgz.1234567.com.cn/js/${code}.js`;
     const res = fresh
-      ? await fetch(url, { headers: HEADERS, cache: "no-store" })
-      : await fetch(url, { headers: HEADERS, next: { revalidate: 30 } });
+      ? await emFetch(`${base}?rt=${Date.now()}`, { headers: HEADERS, cache: "no-store" })
+      : await emFetch(base, { headers: HEADERS, next: { revalidate: 30 } });
     if (!res.ok) return null;
     const text = await res.text();
     const m = text.match(/jsonpgz\(([\s\S]*)\)/);
@@ -96,8 +132,9 @@ function tsToDate(ms: number): string {
 
 /** 拉取历史净值（取最近 limit 个交易日）。历史数据每小时最多回源一次。 */
 export async function fetchHistory(code: string, limit = 250): Promise<NavPoint[]> {
+  if (!FUND_CODE_RE.test(code)) return [];
   try {
-    const res = await fetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`, {
+    const res = await emFetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`, {
       headers: HEADERS,
       next: { revalidate: 3600 },
     });
@@ -105,11 +142,13 @@ export async function fetchHistory(code: string, limit = 250): Promise<NavPoint[
     const text = await res.text();
     const m = text.match(/Data_netWorthTrend\s*=\s*(\[[^\]]*\])/);
     if (!m) return [];
-    const arr = JSON.parse(m[1]) as { x: number; y: number }[];
+    const arr = JSON.parse(m[1]) as { x: number; y: number | null }[];
     return arr
       .slice(-limit)
-      .map((p) => ({ date: tsToDate(p.x), nav: Number(p.y.toFixed(4)) }))
-      .filter((p) => Number.isFinite(p.nav) && p.nav > 0); // 剔除异常/缺失净值，避免下游除零
+      // 先 Number 再过滤：个别点 y 为 null，直接 p.y.toFixed 会抛异常导致整段历史丢失
+      .map((p) => ({ date: tsToDate(p.x), nav: Number(p.y) }))
+      .filter((p) => Number.isFinite(p.nav) && p.nav > 0) // 剔除异常/缺失净值，避免下游除零
+      .map((p) => ({ date: p.date, nav: Number(p.nav.toFixed(4)) }));
   } catch {
     return [];
   }
@@ -137,7 +176,8 @@ async function buildFund(code: string, opts: BuildOpts = {}): Promise<Fund | nul
   const lastNav = history[history.length - 1].nav; // 权威「最新净值」= 历史净值最新点（gz 的 dwjz 偶尔滞后一天）
   return {
     code,
-    name: est?.name ?? opts.name ?? meta?.name ?? code,
+    // 用 || 而非 ??：排行榜兜底等来源的 name 可能是空字符串
+    name: est?.name || opts.name || meta?.name || code,
     type: opts.type ?? meta?.type ?? "其他",
     manager: opts.manager ?? meta?.manager ?? "—",
     nav: lastNav,
@@ -156,7 +196,7 @@ const RANK_FALLBACK: { code: string; name: string; type?: string; manager?: stri
 async function fetchRanking(limit: number, sort: RankSort): Promise<{ code: string; name: string }[]> {
   try {
     const url = `https://fund.eastmoney.com/data/rankhandler.aspx?op=ph&dt=kf&ft=all&rs=&gs=0&sc=${sort}&st=desc&pi=1&pn=${limit}&dx=1`;
-    const res = await fetch(url, {
+    const res = await emFetch(url, {
       headers: { ...HEADERS, Referer: "https://fund.eastmoney.com/data/fundranking.html" },
       next: { revalidate: 1800 },
     });
@@ -201,9 +241,8 @@ export async function fetchPopularFunds(limit = 8, sort: RankSort = "1nzf"): Pro
     if (picked.length >= limit) break;
   }
 
-  const funds = await Promise.all(
-    picked.map((e) => buildFund(e.code, { name: e.name, type: e.type, manager: e.manager })),
-  );
+  // 并发池：每只基金最多 3 个上游 fetch，直接 Promise.all 会瞬时打出 60+ 并发
+  const funds = await mapWithLimit(picked, 6, (e) => buildFund(e.code, { name: e.name, type: e.type, manager: e.manager }));
   return funds.filter((f): f is Fund => f !== null);
 }
 
@@ -221,8 +260,8 @@ export async function searchFunds(key: string, fresh = false): Promise<FundMeta[
   try {
     const url = `https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx?m=1&key=${encodeURIComponent(key)}`;
     const res = fresh
-      ? await fetch(url, { headers: HEADERS, cache: "no-store" })
-      : await fetch(url, { headers: HEADERS, next: { revalidate: 3600 } });
+      ? await emFetch(url, { headers: HEADERS, cache: "no-store" })
+      : await emFetch(url, { headers: HEADERS, next: { revalidate: 3600 } });
     if (!res.ok) return [];
     const json = JSON.parse(await res.text()) as { Datas?: SearchItem[] };
     return (json.Datas ?? [])
@@ -298,7 +337,8 @@ interface IndexDiff {
 async function fetchIndicesFrom(host: string): Promise<IndexQuote[] | null> {
   try {
     const url = `https://${host}/api/qt/ulist.np/get?fltt=2&secids=${INDEX_SECIDS}&fields=f2,f3,f4,f12,f13,f14`;
-    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    // revalidate:5 而非 no-store：多标签/多用户 15s 轮询时压低上游 QPS，5s 内新鲜度足够
+    const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 5 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { diff?: IndexDiff[] } };
     const diff = json.data?.diff;
@@ -321,7 +361,7 @@ export async function fetchIndices(): Promise<IndexQuote[]> {
 async function fetchIndexQuoteFrom(host: string, secid: string): Promise<Omit<IndexDetail, "trend"> | null> {
   try {
     const url = `https://${host}/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secid)}&fields=f2,f3,f4,f5,f6,f12,f13,f14,f15,f16,f17,f18`;
-    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 5 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { diff?: IndexDiff[] } };
     const d = json.data?.diff?.[0];
@@ -331,14 +371,15 @@ async function fetchIndexQuoteFrom(host: string, secid: string): Promise<Omit<In
       code: d.f12,
       name: d.f14,
       price: d.f2,
-      change: d.f4,
-      changePct: d.f3,
-      high: d.f15 ?? 0,
-      low: d.f16 ?? 0,
-      open: d.f17 ?? 0,
-      prevClose: d.f18 ?? 0,
-      volume: d.f5 ?? 0,
-      amount: d.f6 ?? 0,
+      change: num(d.f4),
+      changePct: num(d.f3),
+      // 集合竞价前/停牌时高开低昨等字段可能为 "-"，num 兜底防 NaN
+      high: num(d.f15),
+      low: num(d.f16),
+      open: num(d.f17),
+      prevClose: num(d.f18),
+      volume: num(d.f5),
+      amount: num(d.f6),
     };
   } catch {
     return null;
@@ -348,7 +389,7 @@ async function fetchIndexQuoteFrom(host: string, secid: string): Promise<Omit<In
 async function fetchTrendFrom(host: string, secid: string, ndays: number): Promise<{ time: string; price: number }[] | null> {
   try {
     const url = `https://${host}/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2&fields2=f51,f53&iscr=0&ndays=${ndays}`;
-    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 20 } });
+    const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 20 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { trends?: string[] } };
     const trends = json.data?.trends;
@@ -390,7 +431,7 @@ async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: num
   try {
     // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低
     const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=0&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55`;
-    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 300 } });
+    const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 300 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { klines?: string[] } };
     const klines = json.data?.klines;
@@ -444,7 +485,7 @@ async function fetchConstituentsFrom(
 ): Promise<{ stocks: ConstituentStock[]; total: number } | null> {
   try {
     const url = `https://${host}/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&fid=f3&fs=${encodeURIComponent(fs)}&fields=f2,f3,f12,f14,f21`;
-    const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, cache: "no-store" });
+    const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 5 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { total?: number; diff?: Record<string, ClistDiff> } };
     const diff = json.data?.diff;
@@ -452,9 +493,9 @@ async function fetchConstituentsFrom(
     const stocks = Object.values(diff).map((d) => ({
       code: d.f12,
       name: d.f14,
-      price: Number(d.f2) / 100, // 未用 fltt，价格/涨跌幅为放大100倍
-      changePct: Number(d.f3) / 100,
-      floatCap: Number(d.f21) || 0,
+      price: num(d.f2) / 100, // 未用 fltt，价格/涨跌幅为放大100倍；停牌/新股为 "-"，num 防 NaN
+      changePct: num(d.f3) / 100,
+      floatCap: num(d.f21),
     }));
     return { stocks, total: json.data?.total ?? stocks.length };
   } catch {
@@ -472,15 +513,17 @@ export async function fetchConstituents(secid: string, pn = 1, pz = 10): Promise
   );
 }
 
-/** 北京时间「今天」的日期字符串 YYYY-MM-DD */
+/** 北京时间「今天」的日期字符串 YYYY-MM-DD。
+ *  epoch+8h 后用 getUTC* 读即为北京墙钟，与服务器时区无关（不要再加 getTimezoneOffset，
+ *  否则非 UTC 服务器上会错移，如北京时区机器 0-8 点会返回昨天）。 */
 function todayBeijing(): string {
-  const now = new Date();
-  const bj = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 8 * 3600000);
+  const bj = new Date(Date.now() + 8 * 3600000);
   return `${bj.getUTCFullYear()}-${pad2(bj.getUTCMonth() + 1)}-${pad2(bj.getUTCDate())}`;
 }
 
 /** 取单只基金的多区间涨幅（用历史净值计算，区间相对最新净值日期）。 */
 export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | null> {
+  if (!FUND_CODE_RE.test(code)) return null;
   const [est, history] = await Promise.all([fetchEstimate(code, true), fetchHistory(code, 400)]);
   if (history.length === 0) return null;
   const last = history[history.length - 1];
@@ -505,10 +548,12 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
   // 盘中估值 = 天天基金原始盘中估值（估值净值 gsz + 估值涨幅 gszzl，相对前一交易日收盘算；是预估值，可能与实际净值有偏差）
   const estimateNav = est?.estimateNav ?? latestNav;
   const estimateChangePct = est?.estimateChangePct ?? 0;
-  // 当日涨幅：估值日=今天且未结算(净值未公布) → 用实时估值涨幅并标「估」；否则用官方确认涨幅
+  // 当日涨幅：估值日=今天且未结算(净值未公布) → 用实时估值涨幅并标「估」；否则用官方确认涨幅。
+  // 只有 1 个净值点的新基金没有确认涨幅，只能退回估值口径，此时同样标「估」而非冒充确认值
   const estimated = !!est && gzDate > last.date && gzDate === todayBeijing();
-  const dayChangePct = estimated ? estimateChangePct : confirmedChange ?? estimateChangePct;
-  const dayNav = estimated ? estimateNav : latestNav;
+  const useEstimate = estimated || confirmedChange == null;
+  const dayChangePct = useEstimate ? estimateChangePct : confirmedChange;
+  const dayNav = useEstimate ? estimateNav : latestNav;
 
   return {
     code,
@@ -520,7 +565,7 @@ export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | nu
     estimateFresh: !!est,
     dayChangePct,
     dayNav,
-    dayEstimated: estimated,
+    dayEstimated: useEstimate,
     weekPct: changePct(latestNav, navBefore(history, mondayStr)),
     monthPct: changePct(latestNav, navBefore(history, `${yStr}-${mStr}-01`)),
     ytdPct: changePct(latestNav, navBefore(history, `${yStr}-01-01`)),
