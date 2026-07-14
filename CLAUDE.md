@@ -37,6 +37,20 @@
 排序维度：`rzdf`今日 / `1yzf`近1月 / `3yzf`近3月 / `1nzf`近1年 / `jnzf`今年来。
 ⚠️ 接口可能随时变更/限流；**估值仅交易时段（周一~五约 9:30–15:00）更新**；正式商用应换持牌数据源。无可靠的「人气榜」公开接口，所以「热门」用的是**业绩排行榜**口径。
 
+### 抗限流备源（lib/backup-sources.ts，仅主源失败时启用，估值口径仍以天天基金为准）
+
+| 数据 | 主源 | 备源 |
+|---|---|---|
+| 盘中估值 | fundgz（逐只） | 新浪 `hq.sinajs.cn/list=fu_{code},...`（**一次批量**，字段[2]估值 [3]昨净值 [6]估值涨幅% 语义与 gsz/gszzl 等价） |
+| 指数行情 | push2→push2delay | 腾讯 `qt.gtimg.cn/q=sh000001,...`（个别缺失也用它**补齐**；无日经225） |
+| 历史净值 | pingzhongdata | 无备源——用进程内 24h 旧值兜底 |
+
+- 新浪必须带 `Referer: finance.sina.com.cn`；新浪/腾讯返回 **GBK**，用 `TextDecoder("gb18030")` 解码（数字是 ASCII，解码失败可退化）。
+- **腾讯基金估值接口 fundSsgz 已冻结**（数据停在 2023-08，实测确认），勿接入。
+- 腾讯指数各市场字段位置不一致，**只用 [3]现价 [4]昨收自行算涨跌**；**东财 `100.NDX` 是纳斯达克综合**（对应腾讯 `usIXIC`，不是 `usNDX` 纳指100，实测踩过）。
+- 韧性策略（eastmoney.ts）：估值 fresh 走 `revalidate:15` 短缓存（分钟级数据，no-store 无意义；Next 数据缓存是 SWR 语义，稳态新鲜度上界≈2×revalidate）；同 key 并发去重 `dedup`；`remember/recall` 最近成功值兜底（估值/指数 10min、历史 24h，容量 800 条 FIFO）；历史净值在北京 19~24 点公布时段缓存缩到 5 分钟。
+- **估值回退顺序（fetchEstimatesBatch，勿乱改）**：主源 → **90s 内主源旧值** → 新浪批量 → 10min 旧值（主源优先于新浪）。⚠️ 新浪与天天基金是**不同的估算模型**（实测同时刻可差 0.6+ 个百分点），若主源一失败就直接用新浪，间歇限流时估值会每轮轮询来回跳变——所以近期主源旧值排在新浪前，且新浪值存独立的 `est-sina:` 键不污染主源旧值层；「确认无估值」的基金（jsonpgz() 空返回）负缓存 30min 免得常态打新浪。/api/quotes 先整批 fetchEstimatesBatch 再把结果传入 fetchQuoteMetrics（保持新浪一次批量，勿改回逐只内部查）。指数/分时旧值均按条目粒度记忆且只在真实抓到时刷新时间戳（防残缺覆盖完整快照、防旧值被轮询续期永不过期）。
+
 ## 目录与关键文件
 
 ```
@@ -56,7 +70,7 @@ src/
 │  ├─ manifest.ts / robots.ts / icon.png / apple-icon.png  PWA + SEO
 │  └─ api/
 │     ├─ funds/             GET 全量（真实优先+mock兜底）
-│     ├─ estimate/          GET ?codes= 轻量实时估值（供客户端轮询，no-store；去重+校验+并发池）
+│     ├─ estimate/          GET ?codes= 轻量实时估值（轮询用；fundgz revalidate:15 → 90s内主源旧值 → 新浪批量 → 10min旧值；去重+校验+并发池）
 │     ├─ quotes/            GET ?codes= 多指标行情（自选/持有/详情用；上游全挂返回 503）
 │     ├─ fund/              GET ?code= 单只完整数据（搜索添加用）
 │     ├─ search/            GET ?key= 基金搜索（key 截断 32、走 1h 缓存）
@@ -65,7 +79,8 @@ src/
 │     └─ index|indices|kline|constituents/  指数详情/指数条/K线/成分股（secid 格式校验）
 ├─ lib/
 │  ├─ types.ts              领域类型（Fund/NavPoint/Prediction/QuoteMetrics/IndexDetail 等）
-│  ├─ eastmoney.ts          ★服务端数据层：估值/历史/搜索/排行/指数/K线（全部走 emFetch 带超时；parseCodes/mapWithLimit/SECID_RE 也在这）
+│  ├─ eastmoney.ts          ★服务端数据层：估值/历史/搜索/排行/指数/K线（全部走 emFetch 带超时；parseCodes/mapWithLimit/SECID_RE、dedup 去重与 remember/recall 旧值兜底也在这）
+│  ├─ backup-sources.ts     备源（新浪批量估值 fu_ / 腾讯指数 qt，GBK 解码；仅主源失败时启用）
 │  ├─ news.ts               资讯数据层（东财要闻 getNewsByColumns + 7×24 getFastNewsList）
 │  ├─ data.ts               getDashboardFunds：真实数据优先，失败回退 mock
 │  ├─ prediction.ts         ★预测「信号引擎」（可替换，见下）

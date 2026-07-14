@@ -16,6 +16,7 @@ import type {
   QuoteMetrics,
   RankSort,
 } from "./types";
+import { fetchSinaEstimates, fetchTencentIndices } from "./backup-sources";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -54,6 +55,42 @@ export function parseCodes(raw: string | null, max = 50): string[] {
     .filter((c) => FUND_CODE_RE.test(c))
     .slice(0, max);
 }
+
+// ---- 进程级韧性设施：同 key 请求去重 + 最近成功值兜底 ----
+// serverless 温实例的模块级内存跨请求保留，足以扛住几分钟的上游限流窗口；冷启动丢失可接受。
+
+const inflight = new Map<string, Promise<unknown>>();
+/** 同一时刻对同一 key 的并发调用只发一次上游，共享同一个 Promise（防多用户/多页轮询放大）。 */
+function dedup<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const cur = inflight.get(key);
+  if (cur) return cur as Promise<T>;
+  const p = fn().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+const lastGood = new Map<string, { value: unknown; at: number }>();
+/** 容量上限：hist 条目最大（400 点净值数十 KB），800 条封顶约几十 MB，
+ *  远超正常用户的自选+持有规模——只防公开接口被批量扫码时温实例内存无界增长 */
+const LAST_GOOD_MAX = 800;
+/** 记录最近一次成功结果（stale-while-error 兜底用）。重插保持插入序≈LRU，超限淘汰最旧。 */
+function remember<T>(key: string, value: T): T {
+  lastGood.delete(key);
+  lastGood.set(key, { value, at: Date.now() });
+  while (lastGood.size > LAST_GOOD_MAX) lastGood.delete(lastGood.keys().next().value!);
+  return value;
+}
+/** 取 maxAgeMs 内的最近成功结果；没有或过期返回 null。
+ *  只读不删：同一 key 会被不同 maxAge 查询（如估值的 90s 快查与 10min 兜底）。 */
+function recall<T>(key: string, maxAgeMs: number): T | null {
+  const hit = lastGood.get(key);
+  if (!hit || Date.now() - hit.at > maxAgeMs) return null;
+  return hit.value as T;
+}
+
+/** 实时类数据（估值/指数）允许回退到 10 分钟内的旧值；历史净值一天才变一次，放宽到 24h */
+const STALE_LIVE_MS = 10 * 60_000;
+const STALE_HISTORY_MS = 24 * 3600_000;
 
 /** 跟踪的基金（真实代码）。type / manager 在此维护，名称与净值/估值来自接口。 */
 export interface TrackedFund {
@@ -96,33 +133,89 @@ interface GzPayload {
   gztime: string;
 }
 
-/** 拉取实时估值。fresh=true 时不走缓存（供客户端轮询的接口使用）。 */
+/** 拉取实时估值（仅天天基金主源；带备源回退用 fetchEstimatesBatch）。
+ *  估值上游分钟级更新，no-store 没有意义：fresh=true 走 15s 短缓存（轮询用）、否则 30s——
+ *  多用户/多标签的轮询在服务端（共享 Data Cache）合并成一份上游流量，这是抗限流的第一道闸。
+ *  注：Next 数据缓存是 stale-while-revalidate——过期后首个请求仍返回旧值并触发后台刷新，
+ *  稳态下数据新鲜度上界约 2×revalidate（fresh 档约 30s），对分钟级更新的估值可接受。 */
 export async function fetchEstimate(code: string, fresh = false): Promise<Estimate | null> {
   if (!FUND_CODE_RE.test(code)) return null;
-  try {
-    // rt 防缓存参数只能加在 fresh 分支：Next 数据缓存以完整 URL 为 key，
-    // 缓存路径带 rt=Date.now() 会让 revalidate:30 永远 miss 且缓存条目无限增长
-    const base = `https://fundgz.1234567.com.cn/js/${code}.js`;
-    const res = fresh
-      ? await emFetch(`${base}?rt=${Date.now()}`, { headers: HEADERS, cache: "no-store" })
-      : await emFetch(base, { headers: HEADERS, next: { revalidate: 30 } });
-    if (!res.ok) return null;
-    const text = await res.text();
-    const m = text.match(/jsonpgz\(([\s\S]*)\)/);
-    if (!m) return null;
-    const gz = JSON.parse(m[1]) as GzPayload;
-    const nav = Number(gz.dwjz);
-    return {
-      code,
-      name: gz.name,
-      nav,
-      estimateNav: Number(gz.gsz) || nav,
-      estimateChangePct: Number(gz.gszzl) || 0,
-      gztime: gz.gztime,
-    };
-  } catch {
-    return null;
+  return dedup(`gz:${code}:${fresh}`, async () => {
+    try {
+      // URL 必须稳定（不带 rt 时间戳），Next 数据缓存以完整 URL 为 key
+      const res = await emFetch(`https://fundgz.1234567.com.cn/js/${code}.js`, {
+        headers: HEADERS,
+        next: { revalidate: fresh ? 15 : 30 },
+      });
+      if (!res.ok) return null;
+      const text = await res.text();
+      const m = text.match(/jsonpgz\(([\s\S]*)\)/);
+      if (!m) return null;
+      if (!m[1].trim()) {
+        // 主源健康但确认无估值数据（货币基金/部分 QDII 返回 jsonpgz();）——
+        // 负缓存 30 分钟，免得 fetchEstimatesBatch 对这类基金常态性打新浪备源
+        remember(`noest:${code}`, true);
+        return null;
+      }
+      const gz = JSON.parse(m[1]) as GzPayload;
+      const nav = Number(gz.dwjz);
+      return {
+        code,
+        name: gz.name,
+        nav,
+        estimateNav: Number(gz.gsz) || nav,
+        estimateChangePct: Number(gz.gszzl) || 0,
+        gztime: gz.gztime,
+      };
+    } catch {
+      return null;
+    }
+  });
+}
+
+/** 批量实时估值（带备源回退 + 旧值兜底）。回退顺序（每一级只处理上一级仍缺的代码）：
+ *  1) 天天基金逐只（并发池）——主源，估值口径以它为准，成功值记入 est:{code}；
+ *  2) 90 秒内的主源旧值——主源间歇性限流时优先沿用自家口径。⚠️ 新浪与天天基金是
+ *     不同的估算模型（实测同一时刻可差 0.6+ 个百分点），主源抖动时若直接顶替会导致
+ *     估值/当日收益每轮轮询来回跳变，所以近期主源旧值排在新浪前面；
+ *  3) 新浪 fu_ 一次批量（基准语义等价：估值涨幅同样相对昨日净值 dwjz）。
+ *     新浪值记入独立的 est-sina:{code}，不污染主源旧值层；已负缓存「确认无估值」的代码跳过；
+ *  4) 10 分钟内的主源旧值 → 10 分钟内的新浪旧值。
+ *  注意：主源对「本就没有估值数据」的基金（货币/部分 QDII）返回 null 并做负缓存，
+ *  这类代码各级都不会命中，行为与之前一致（前端按无估值处理）。 */
+export async function fetchEstimatesBatch(codes: string[]): Promise<Estimate[]> {
+  const valid = codes.filter((c) => FUND_CODE_RE.test(c));
+  if (valid.length === 0) return [];
+
+  const primary = await mapWithLimit(valid, 8, (c) => fetchEstimate(c, true));
+  const got = new Map<string, Estimate>();
+  for (const e of primary) {
+    if (e) got.set(e.code, remember(`est:${e.code}`, e));
   }
+
+  // 2) 近期主源旧值
+  let missing = valid.filter((c) => !got.has(c));
+  for (const c of missing) {
+    const recent = recall<Estimate>(`est:${c}`, 90_000);
+    if (recent) got.set(c, recent);
+  }
+
+  // 3) 新浪批量兜底（跳过确认无估值的代码）
+  missing = valid.filter((c) => !got.has(c) && !recall<boolean>(`noest:${c}`, 30 * 60_000));
+  if (missing.length > 0) {
+    for (const e of await fetchSinaEstimates(missing)) {
+      if (!got.has(e.code)) got.set(e.code, remember(`est-sina:${e.code}`, e));
+    }
+  }
+
+  // 4) 旧值兜底：主源优先于新浪
+  for (const c of valid) {
+    if (got.has(c)) continue;
+    const stale =
+      recall<Estimate>(`est:${c}`, STALE_LIVE_MS) ?? recall<Estimate>(`est-sina:${c}`, STALE_LIVE_MS);
+    if (stale) got.set(c, stale);
+  }
+  return valid.map((c) => got.get(c)).filter((e): e is Estimate => !!e);
 }
 
 /** 毫秒时间戳 → 北京时间 YYYY-MM-DD */
@@ -130,32 +223,47 @@ function tsToDate(ms: number): string {
   return new Date(ms + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-/** 拉取历史净值（取最近 limit 个交易日）。历史数据每小时最多回源一次。 */
+/** 是否处于当日净值集中公布时段（北京时间 19:00~24:00）——该窗口缩短历史缓存让新净值尽快可见 */
+function isNavPublishWindow(): boolean {
+  return new Date(Date.now() + 8 * 3600000).getUTCHours() >= 19;
+}
+
+/** 拉取历史净值（取最近 limit 个交易日）。
+ *  常规每小时回源一次；净值公布时段（晚 19~24 点）缩短到 5 分钟；
+ *  上游失败/解析为空时回退 24h 内的最近成功值（历史一天才变一次）。 */
 export async function fetchHistory(code: string, limit = 250): Promise<NavPoint[]> {
   if (!FUND_CODE_RE.test(code)) return [];
-  try {
-    const res = await emFetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`, {
-      headers: HEADERS,
-      next: { revalidate: 3600 },
-    });
-    if (!res.ok) return [];
-    const text = await res.text();
-    const m = text.match(/Data_netWorthTrend\s*=\s*(\[[^\]]*\])/);
-    if (!m) return [];
-    const arr = JSON.parse(m[1]) as { x: number; y: number | null }[];
-    return arr
-      .slice(-limit)
-      // 先 Number 再过滤：个别点 y 为 null，直接 p.y.toFixed 会抛异常导致整段历史丢失
-      .map((p) => ({ date: tsToDate(p.x), nav: Number(p.y) }))
-      .filter((p) => Number.isFinite(p.nav) && p.nav > 0) // 剔除异常/缺失净值，避免下游除零
-      .map((p) => ({ date: p.date, nav: Number(p.nav.toFixed(4)) }));
-  } catch {
-    return [];
-  }
+  const cacheKey = `hist:${code}:${limit}`;
+  return dedup(cacheKey, async () => {
+    let points: NavPoint[] = [];
+    try {
+      const res = await emFetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`, {
+        headers: HEADERS,
+        next: { revalidate: isNavPublishWindow() ? 300 : 3600 },
+      });
+      if (res.ok) {
+        const text = await res.text();
+        const m = text.match(/Data_netWorthTrend\s*=\s*(\[[^\]]*\])/);
+        if (m) {
+          const arr = JSON.parse(m[1]) as { x: number; y: number | null }[];
+          points = arr
+            .slice(-limit)
+            // 先 Number 再过滤：个别点 y 为 null，直接 p.y.toFixed 会抛异常导致整段历史丢失
+            .map((p) => ({ date: tsToDate(p.x), nav: Number(p.y) }))
+            .filter((p) => Number.isFinite(p.nav) && p.nav > 0) // 剔除异常/缺失净值，避免下游除零
+            .map((p) => ({ date: p.date, nav: Number(p.nav.toFixed(4)) }));
+        }
+      }
+    } catch {
+      // 走下方旧值兜底
+    }
+    if (points.length > 0) return remember(cacheKey, points);
+    return recall<NavPoint[]>(cacheKey, STALE_HISTORY_MS) ?? [];
+  });
 }
 
 interface BuildOpts {
-  /** true 时实时估值不走缓存（按代码即时取数用） */
+  /** true 走 15s 短缓存（轮询/按代码即时取数用），false 为 30s，见 fetchEstimate */
   fresh?: boolean;
   name?: string;
   type?: string;
@@ -351,9 +459,32 @@ async function fetchIndicesFrom(host: string): Promise<IndexQuote[] | null> {
   }
 }
 
-/** 拉取大盘指数行情：实时主机 push2 优先，失败回退延迟主机 push2delay。 */
+/** 拉取大盘指数行情：东财 push2 → push2delay 为主源；
+ *  个别指数缺失（东财偶发对某指数返回非数值，如收盘瞬间的港股）或全挂时用腾讯 qt 补齐/兜底（腾讯缺日经）；
+ *  仍缺的逐指数回退 10 分钟内旧值。输出顺序恒为 INDEX_SECIDS 声明顺序。
+ *  旧值按指数粒度记忆（idx:{secid}）且只在真实抓到时刷新时间戳——
+ *  避免整表快照被残缺结果覆盖，也避免旧值被反复续期突破 10 分钟上界。 */
 export async function fetchIndices(): Promise<IndexQuote[]> {
-  return (await fetchIndicesFrom("push2.eastmoney.com")) ?? (await fetchIndicesFrom("push2delay.eastmoney.com")) ?? [];
+  return dedup("indices", async () => {
+    const secids = INDEX_SECIDS.split(",");
+    const em =
+      (await fetchIndicesFrom("push2.eastmoney.com")) ?? (await fetchIndicesFrom("push2delay.eastmoney.com"));
+    const bySecid = new Map<string, IndexQuote>();
+    for (const q of em ?? []) bySecid.set(q.secid, q);
+
+    const missing = secids.filter((s) => !bySecid.has(s));
+    if (missing.length > 0) {
+      for (const q of await fetchTencentIndices(missing)) bySecid.set(q.secid, q);
+    }
+
+    for (const q of bySecid.values()) remember(`idx:${q.secid}`, q);
+    for (const s of secids) {
+      if (bySecid.has(s)) continue;
+      const stale = recall<IndexQuote>(`idx:${s}`, STALE_LIVE_MS);
+      if (stale) bySecid.set(s, stale);
+    }
+    return secids.map((s) => bySecid.get(s)).filter((q): q is IndexQuote => !!q);
+  });
 }
 
 // ---- 指数详情（行情 + 分时） ----
@@ -415,14 +546,22 @@ export async function fetchTrend(secid: string, ndays = 1): Promise<{ time: stri
   );
 }
 
-/** 取单个指数的详情（行情 + 当日分时）。 */
+/** 取单个指数的详情（行情 + 当日分时）。双主机全挂时回退 10 分钟内旧值；
+ *  行情成功但分时接口挂时沿用 10 分钟内的旧分时（避免图表闪空）。
+ *  分时旧值单独记忆（trend:{secid}）且只在真实抓到时刷新时间戳——
+ *  若把回收的旧分时随行情一起 remember，会被轮询反复续期、冻结的曲线永不过期。 */
 export async function fetchIndexDetail(secid: string): Promise<IndexDetail | null> {
-  const quote =
-    (await fetchIndexQuoteFrom("push2.eastmoney.com", secid)) ??
-    (await fetchIndexQuoteFrom("push2delay.eastmoney.com", secid));
-  if (!quote) return null;
-  const trend = await fetchTrend(secid, 1);
-  return { ...quote, trend };
+  const cacheKey = `idxd:${secid}`;
+  return dedup(cacheKey, async () => {
+    const quote =
+      (await fetchIndexQuoteFrom("push2.eastmoney.com", secid)) ??
+      (await fetchIndexQuoteFrom("push2delay.eastmoney.com", secid));
+    if (!quote) return recall<IndexDetail>(cacheKey, STALE_LIVE_MS);
+    let trend = await fetchTrend(secid, 1);
+    if (trend.length > 0) remember(`trend:${secid}`, trend);
+    else trend = recall<{ time: string; price: number }[]>(`trend:${secid}`, STALE_LIVE_MS) ?? [];
+    return remember(cacheKey, { ...quote, trend });
+  });
 }
 
 // ---- K 线（日/周/月）----
@@ -521,10 +660,18 @@ function todayBeijing(): string {
   return `${bj.getUTCFullYear()}-${pad2(bj.getUTCMonth() + 1)}-${pad2(bj.getUTCDate())}`;
 }
 
-/** 取单只基金的多区间涨幅（用历史净值计算，区间相对最新净值日期）。 */
-export async function fetchQuoteMetrics(code: string): Promise<QuoteMetrics | null> {
+/** 取单只基金的多区间涨幅（用历史净值计算，区间相对最新净值日期）。
+ *  presetEst：批量调用方（/api/quotes）先用 fetchEstimatesBatch 一次拿全所有估值再逐只传入——
+ *  避免每只基金各自触发「批量为 1」的新浪兜底请求，把备源打成逐只轰炸。
+ *  显式传 null 表示「已批量查过、确认无估值」，不要再内部重查。 */
+export async function fetchQuoteMetrics(code: string, presetEst?: Estimate | null): Promise<QuoteMetrics | null> {
   if (!FUND_CODE_RE.test(code)) return null;
-  const [est, history] = await Promise.all([fetchEstimate(code, true), fetchHistory(code, 400)]);
+  const [est, history] = await Promise.all([
+    presetEst !== undefined
+      ? Promise.resolve(presetEst)
+      : fetchEstimatesBatch([code]).then((r) => r[0] ?? null), // 单只调用时仍带新浪备源与旧值兜底
+    fetchHistory(code, 400),
+  ]);
   if (history.length === 0) return null;
   const last = history[history.length - 1];
   const latestNav = last.nav;
