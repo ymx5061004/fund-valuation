@@ -21,7 +21,8 @@ export function TabBar() {
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
       <ul className="mx-auto flex max-w-2xl">
         {TABS.map((t) => {
-          const active = t.href === "/" ? pathname === "/" : pathname.startsWith(t.href);
+          // 精确匹配或匹配到路径边界（/xxx/...），避免 "/member" 误命中 "/me" 这类前缀
+          const active = pathname === t.href || (t.href !== "/" && pathname.startsWith(`${t.href}/`));
           return (
             <li key={t.href} className="flex-1">
               <Link
