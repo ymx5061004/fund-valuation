@@ -85,6 +85,7 @@ src/
 │  ├─ data.ts               getDashboardFunds：真实数据优先，失败回退 mock
 │  ├─ prediction.ts         ★预测「信号引擎」（可替换，见下）
 │  ├─ backtest.ts           ★回测（look-ahead 安全：方向命中率 + 信号策略 vs 持有）
+│  ├─ meihua.ts             梅花易数数字起卦（纯娱乐，代码+目标日确定性起卦，体用生克断次日倾向；**严禁并入 predict 打分**）
 │  ├─ mock-data.ts          演示假数据（种子随机，可复现）；TRACKED_FUNDS 兜底代码也在 eastmoney.ts
 │  ├─ use-local-storage.ts  SSR 安全的 localStorage 钩子（返回 [value,set,loaded] 三元组）
 │  ├─ use-polling.ts        可见性感知轮询钩子 + isAShareTradingTime（隐藏暂停、非交易时段降频）
@@ -105,6 +106,7 @@ src/
    ├─ import-sheet.tsx      持仓手动导入/编辑底部弹层
    ├─ nav-chart.tsx         ECharts 净值图（'use client'，ResizeObserver 自适应）
    ├─ prediction-panel.tsx / backtest-panel.tsx  涨跌预测 / 回测面板（含免责声明）
+   ├─ meihua-panel.tsx      周易卦象娱乐面板（本卦/变卦/互卦/体用生克；挂载后起卦防 hydration 不一致；「仅供娱乐」标识勿删）
    ├─ holdings-calculator.tsx 持仓收益估算
    └─ ui/{card,badge}.tsx   基础组件 + SignalBadge
 ```
@@ -114,6 +116,8 @@ src/
 `prediction.ts` 的 `predict(fund): Prediction` 是**纯函数**，当前用技术指标（MA5/MA20、近10日动量、RSI14）综合打分给出 看涨/看跌/震荡 + 可解释依据。
 **要换 LLM 研判或 ML 模型，只改 `predict` 内部实现、保持签名不变**，页面/组件无需改动。
 ⚠️ 任何预测**不构成投资建议**，UI 已内置「仅供参考、市场有风险」提示——改动时务必保留。
+
+另有 `meihua.ts` + `MeihuaPanel`（梅花易数卦象，/market 与 /fund/[code] 均已接入）：**纯娱乐定位**（用户明确要求独立面板），数字起卦对同一基金同一预测日确定可复现。它与 predict() 完全隔离——**不得并入综合打分或任何技术信号权重**，面板的「仅供娱乐」徽章与免责文案不可移除。
 
 ## 应用结构与功能现状（底部 Tab 布局，养基宝风格）
 

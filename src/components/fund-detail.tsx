@@ -11,6 +11,7 @@ import { NavChart } from "@/components/nav-chart";
 import { ImportSheet } from "@/components/import-sheet";
 import { PredictionPanel } from "@/components/prediction-panel";
 import { BacktestPanel } from "@/components/backtest-panel";
+import { MeihuaPanel } from "@/components/meihua-panel";
 
 function money(v: number, sign = false): string {
   const s = v.toLocaleString("zh-CN", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
@@ -260,6 +261,11 @@ export function FundDetail({ code }: { code: string }) {
           <BacktestPanel result={backtestResult} />
         </section>
       )}
+
+      {/* 梅花易数卦象（纯娱乐，独立于技术指标，勿并入 predict 打分） */}
+      <section className="px-4 pt-4">
+        <MeihuaPanel code={code} />
+      </section>
 
       {/* 净值历史 */}
       <section className="mt-4">

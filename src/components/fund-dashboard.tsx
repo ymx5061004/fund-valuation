@@ -15,6 +15,7 @@ import { PredictionPanel } from "@/components/prediction-panel";
 import { HoldingsCalculator } from "@/components/holdings-calculator";
 import { FundSearch } from "@/components/fund-search";
 import { BacktestPanel } from "@/components/backtest-panel";
+import { MeihuaPanel } from "@/components/meihua-panel";
 
 const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
@@ -429,6 +430,8 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
         <div className="space-y-4">
           <PredictionPanel prediction={selectedPrediction} />
           <BacktestPanel result={backtestResult} />
+          {/* 梅花易数卦象（纯娱乐，独立于技术指标，勿并入 predict 打分） */}
+          <MeihuaPanel code={selected.code} />
           <HoldingsCalculator
             fund={selected}
             shares={holdings[selected.code] ?? 0}
