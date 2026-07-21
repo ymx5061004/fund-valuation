@@ -36,6 +36,36 @@ export interface KlineCandle {
   close: number;
   high: number;
   low: number;
+  /** 成交额（元），活跃市值(0AMV)计算用；个别海外指数可能缺失 */
+  amount?: number;
+}
+
+/** 活跃市值(0AMV)单点：近 N 日成交额滚动合计（lib/amv.ts） */
+export interface AmvPoint {
+  date: string;
+  /** 活跃市值（元） */
+  amv: number;
+  /** 当日收盘点位（与指数走势对比用） */
+  close: number;
+}
+
+/** 活跃市值研判结果（lib/amv.ts analyzeAmv） */
+export interface AmvAnalysis {
+  signal: Signal;
+  /** 状态短语，如「量价同步 · 上涨可持续」 */
+  state: string;
+  /** 最新活跃市值（元） */
+  amv: number;
+  /** 活跃市值较 5 个交易日前变化 % */
+  trend5Pct: number;
+  /** 近 20 个交易日指数涨跌 % */
+  index20Pct: number;
+  /** 近 20 个交易日活跃市值变化 % */
+  amv20Pct: number;
+  /** 近 60 日窗口的顶/底背离；样本不足或无背离为 null */
+  divergence: "top" | "bottom" | null;
+  /** 可解释的判断依据 */
+  reasons: string[];
 }
 
 /** 指数成分股 */

@@ -85,6 +85,7 @@ src/
 │  ├─ data.ts               getDashboardFunds：真实数据优先，失败回退 mock
 │  ├─ prediction.ts         ★预测「信号引擎」（可替换，见下）
 │  ├─ backtest.ts           ★回测（look-ahead 安全：方向命中率 + 信号策略 vs 持有）
+│  ├─ amv.ts                活跃市值 0AMV 信号引擎（纯函数：近10日成交额滚动合计≈活跃资金，趋势/真假涨跌/顶底背离，见下）
 │  ├─ meihua.ts             梅花易数数字起卦（纯娱乐，代码+目标日确定性起卦，体用生克断次日倾向；**严禁并入 predict 打分**）
 │  ├─ mock-data.ts          演示假数据（种子随机，可复现）；TRACKED_FUNDS 兜底代码也在 eastmoney.ts
 │  ├─ use-local-storage.ts  SSR 安全的 localStorage 钩子（返回 [value,set,loaded] 三元组）
@@ -106,6 +107,7 @@ src/
    ├─ import-sheet.tsx      持仓手动导入/编辑底部弹层
    ├─ nav-chart.tsx         ECharts 净值图（'use client'，ResizeObserver 自适应）
    ├─ prediction-panel.tsx / backtest-panel.tsx  涨跌预测 / 回测面板（含免责声明）
+   ├─ amv-panel.tsx / amv-strip.tsx  活跃市值 0AMV 面板（指数详情页，双轴图+研判依据）/ 沪指 0AMV 摘要条（/market，服务端组件）
    ├─ meihua-panel.tsx      周易卦象娱乐面板（本卦/变卦/互卦/体用生克；挂载后起卦防 hydration 不一致；「仅供娱乐」标识勿删）
    ├─ holdings-calculator.tsx 持仓收益估算
    └─ ui/{card,badge}.tsx   基础组件 + SignalBadge
@@ -118,6 +120,14 @@ src/
 ⚠️ 任何预测**不构成投资建议**，UI 已内置「仅供参考、市场有风险」提示——改动时务必保留。
 
 另有 `meihua.ts` + `MeihuaPanel`（梅花易数卦象，/market 与 /fund/[code] 均已接入）：**纯娱乐定位**（用户明确要求独立面板），数字起卦对同一基金同一预测日确定可复现。它与 predict() 完全隔离——**不得并入综合打分或任何技术信号权重**，面板的「仅供娱乐」徽章与免责文案不可移除。
+
+### 活跃市值 0AMV（lib/amv.ts + AmvPanel/AmvStrip，大盘指标）
+
+**用户明确的定义**：统计市场里真正参与交易的浮动资金/筹码（剔除大股东长期不动的「死筹」），是**大盘趋势先行指标**——用于 ①判断大盘趋势/分辨真假涨跌 ②辨别放量上涨是真行情还是诱多 ③顶/底背离识别牛熊拐点 ④资金进出强弱。**不是**持仓页的「今日活跃持仓市值」（曾误实现过一次，已回退，勿再犯）。
+- **实现口径**：拿不到全市场逐股浮动筹码数据，用**指数近 10 日成交额滚动合计**作活跃资金代理（死筹不产生成交额）。数据来自东财日 K `f57` 成交额（`fetchKline` fields2 已含 f57，`KlineCandle.amount` 可选——个别海外指数缺失）。
+- 纯函数、look-ahead 安全：`computeAmvSeries`（滚动合计）+ `analyzeAmv`（近5日趋势 / 近20日指数-AMV 同步象限 / 近30vs前30日极值背离）。**盘中要先 `dropUnfinishedToday(candles, secid)` 剔除未收盘当日 K 线**（当日成交额不完整会让末点失真下坠）——按 secid 所属市场收盘时间判定（A 股 15:00 / 港股 16:00 / 日经北京 14:00；未识别市场交易日内一律剔除当日），**必须传 secid**（早期只处理 A 股，港股/日经盘中会误报信号）。东财 kline 在 `beg=0` 时**忽略 lmt 返回 1990 至今全量(~8600 点)**，面板/摘要条算 AMV 前 `slice(-160)` 截尾（否则默认视图跨 36 年、近期趋势被压平）。
+- 接入点：指数详情 `/index/[secid]`（完整面板：双轴图+研判+口诀）、`/market` 沪指摘要条（服务端组件，失败整条隐藏）。
+- 与 predict()/meihua 相互独立，不并入基金打分；面板免责声明（「勿单独作为买卖依据/不构成投资建议」）不可删。仅反映短线活跃资金，长线锁筹品种参考意义有限。
 
 ## 应用结构与功能现状（底部 Tab 布局，养基宝风格）
 
@@ -149,6 +159,7 @@ src/
 ## 待办 / 可继续
 
 - /member 会员页（需自建后端，或降级为「工具」Tab：定投/摊薄计算器）。
+- 活跃市值 0AMV 的板块/个股维度筛选（用户定义里的第 4 用途）：需全市场逐股/逐板块成交额数据，公开接口可用 push2 板块行情探索，暂只做了指数维度。
 - 持仓截图 OCR 导入（ImportSheet 已留占位 Tab，用户暂定先不接）。
 - 自选列表拖拽排序/置顶（现有 自选顺序/涨幅升降 三态排序）。
 - 指数详情页「相关指数基金」联动（secid → 跟踪基金，可用 searchFunds 或静态映射）。

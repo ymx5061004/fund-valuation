@@ -568,8 +568,8 @@ export async function fetchIndexDetail(secid: string): Promise<IndexDetail | nul
 
 async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: number): Promise<KlineCandle[] | null> {
   try {
-    // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低
-    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=0&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55`;
+    // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低 f57 成交额（活跃市值 0AMV 计算用）
+    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=0&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55,f57`;
     const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 300 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { klines?: string[] } };
@@ -577,7 +577,16 @@ async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: num
     if (!klines) return null;
     return klines.map((k) => {
       const p = k.split(",");
-      return { date: p[0], open: Number(p[1]), close: Number(p[2]), high: Number(p[3]), low: Number(p[4]) };
+      const amount = Number(p[5]);
+      return {
+        date: p[0],
+        open: Number(p[1]),
+        close: Number(p[2]),
+        high: Number(p[3]),
+        low: Number(p[4]),
+        // 个别指数无成交额（返回 "-"）→ 不带 amount 字段，amv 计算会整体跳过
+        ...(Number.isFinite(amount) && amount > 0 ? { amount } : {}),
+      };
     });
   } catch {
     return null;

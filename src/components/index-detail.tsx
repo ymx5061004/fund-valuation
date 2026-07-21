@@ -7,6 +7,7 @@ import { changeColor, cn } from "@/lib/utils";
 import { isAShareTradingTime, usePolling } from "@/lib/use-polling";
 import { IndexTrendChart } from "@/components/index-trend-chart";
 import { KlineChart } from "@/components/kline-chart";
+import { AmvPanel } from "@/components/amv-panel";
 
 const TABS: { key: string; label: string; type?: string }[] = [
   { key: "分时", label: "分时" },
@@ -236,6 +237,11 @@ export function IndexDetailView({ secid }: { secid: string }) {
           </div>
 
           <section className="px-2 py-3">{renderChart()}</section>
+
+          {/* 活跃市值 0AMV：活跃资金体量 · 真假涨跌 · 顶底背离 */}
+          <section className="px-4 pb-1 pt-2">
+            <AmvPanel secid={secid} />
+          </section>
 
           {/* 成分股 */}
           {stocks.length > 0 && (
