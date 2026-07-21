@@ -1,27 +1,62 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { fetchKline } from "@/lib/eastmoney";
-import { analyzeAmv, computeAmvSeries, dropUnfinishedToday } from "@/lib/amv";
+import type { AmvBoard } from "@/lib/types";
+import { formatAmountCN } from "@/lib/amv";
+import { changeColor, cn } from "@/lib/utils";
 import { SignalBadge } from "@/components/ui/badge";
 
-/** 沪指活跃市值(0AMV)摘要条（服务端组件，随 /market 的 ISR 更新）。
- *  点击进入上证指数详情页查看完整 0AMV 面板；数据不足/上游失败时整条隐藏。 */
-export async function AmvStrip() {
-  const candles = await fetchKline("1.000001", 101, 120);
-  // 截尾同 AmvPanel：上游忽略 lmt 返回全量历史，只取近段算滚动合计（analyzeAmv 只读尾部，结果一致）
-  const analysis = analyzeAmv(computeAmvSeries(dropUnfinishedToday(candles, "1.000001").slice(-160)));
-  if (!analysis) return null;
+/** /market 顶部「活跃市值 0AMV」入口卡（点进 /amv 独立板块）。
+ *  客户端拉 /api/amv（与板块同口径 buildAmvBoard），不依赖 /market 的构建时预渲染——
+ *  东财瞬时限流时构建期抓不到也不会让入口整片空白；数据未就绪/失败时整条隐藏。 */
+export function AmvStrip() {
+  const [b, setB] = useState<AmvBoard | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/amv");
+        if (!r.ok) return; // 冷启动/瞬时限流 503：保留上一帧，下一轮自愈
+        const j = (await r.json()) as { data: AmvBoard | null };
+        if (!cancelled && j.data) setB(j.data);
+      } catch {
+        // 忽略：入口卡是次要引导，失败就不显示
+      }
+    };
+    void load();
+    // 轮询兜住首拉失败（冷启动/限流），并顺带保持数值新鲜；失败保留已显示值不清空
+    const id = setInterval(load, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  if (!b) return null;
   return (
     <Link
-      href="/index/1.000001"
-      className="mt-2 flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800/60"
+      href="/amv"
+      className="mt-2 flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800/60"
     >
-      <span className="shrink-0 font-medium text-zinc-700 dark:text-zinc-200">沪指活跃市值</span>
-      <SignalBadge signal={analysis.signal} />
-      <span className="min-w-0 truncate text-zinc-500 dark:text-zinc-400">
-        {analysis.state} · 近5日{analysis.trend5Pct >= 0 ? "+" : ""}
-        {analysis.trend5Pct.toFixed(1)}%
-      </span>
-      <span className="ml-auto shrink-0 text-zinc-400">详情 ›</span>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">活跃市值 0AMV</span>
+          <SignalBadge signal={b.analysis.signal} />
+        </div>
+        <div className="mt-0.5 truncate text-xs text-zinc-400">
+          {b.analysis.state} · {b.coverage === "both" ? "大盘活跃资金（估算）" : "仅沪市（深市暂缺）"}
+        </div>
+      </div>
+      <div className="ml-auto text-right">
+        <div className="text-base font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">{formatAmountCN(b.value)}</div>
+        <div className={cn("text-xs font-medium tabular-nums", changeColor(b.change))}>
+          {b.changePct >= 0 ? "+" : ""}
+          {b.changePct.toFixed(2)}%
+        </div>
+      </div>
+      <span className="shrink-0 text-zinc-300 dark:text-zinc-600">›</span>
     </Link>
   );
 }

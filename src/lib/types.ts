@@ -49,6 +49,37 @@ export interface AmvPoint {
   close: number;
 }
 
+/** 两市涨跌家数（活跃市值板块的市场宽度） */
+export interface MarketBreadth {
+  up: number;
+  flat: number;
+  down: number;
+}
+
+/** 活跃市值「独立板块」详情数据（/api/amv，参考指南针 0AMV 板块，公开成交额估算版） */
+export interface AmvBoard {
+  /** 最新活跃市值（元，两市成交额10日滚动合计） */
+  value: number;
+  /** 较上一交易日变化（元） */
+  change: number;
+  /** 较上一交易日变化 % */
+  changePct: number;
+  /** 数据对应交易日 YYYY-MM-DD（盘中为上一收盘日，当日未收盘已剔除） */
+  date: string;
+  /** 今日两市实时成交额（元）；仅盘中（当日 K 线被剔除）时有值，否则 null */
+  todayAmount: number | null;
+  /** 成交额口径：both=沪深两市合计；sh-only=深市 K 线暂缺、仅沪市（绝对值偏低，UI 需注明） */
+  coverage: "both" | "sh-only";
+  /** 当前是否 A 股交易时段 */
+  tradingNow: boolean;
+  /** 研判 */
+  analysis: AmvAnalysis;
+  /** 日线序列（活跃市值 + 沪指点位），最多近约 3 年，供日/周/月视图取用 */
+  points: AmvPoint[];
+  /** 两市涨跌家数；上游不支持时 null */
+  breadth: MarketBreadth | null;
+}
+
 /** 活跃市值研判结果（lib/amv.ts analyzeAmv） */
 export interface AmvAnalysis {
   signal: Signal;

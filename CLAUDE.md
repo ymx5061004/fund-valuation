@@ -107,7 +107,8 @@ src/
    ├─ import-sheet.tsx      持仓手动导入/编辑底部弹层
    ├─ nav-chart.tsx         ECharts 净值图（'use client'，ResizeObserver 自适应）
    ├─ prediction-panel.tsx / backtest-panel.tsx  涨跌预测 / 回测面板（含免责声明）
-   ├─ amv-panel.tsx / amv-strip.tsx  活跃市值 0AMV 面板（指数详情页，双轴图+研判依据）/ 沪指 0AMV 摘要条（/market，服务端组件）
+   ├─ amv-board.tsx / amv-strip.tsx  活跃市值 0AMV 独立板块页（/amv，值+日周月+涨跌家数+研判）/ 入口卡（/market，客户端 fetch /api/amv 轮询，点进 /amv）
+   ├─ amv-panel.tsx / amv-trend-chart.tsx / amv-verdict.tsx  单指数 0AMV 面板（指数详情页）/ 共用双轴图 / 共用研判依据+口诀+免责
    ├─ meihua-panel.tsx      周易卦象娱乐面板（本卦/变卦/互卦/体用生克；挂载后起卦防 hydration 不一致；「仅供娱乐」标识勿删）
    ├─ holdings-calculator.tsx 持仓收益估算
    └─ ui/{card,badge}.tsx   基础组件 + SignalBadge
@@ -126,8 +127,12 @@ src/
 **用户明确的定义**：统计市场里真正参与交易的浮动资金/筹码（剔除大股东长期不动的「死筹」），是**大盘趋势先行指标**——用于 ①判断大盘趋势/分辨真假涨跌 ②辨别放量上涨是真行情还是诱多 ③顶/底背离识别牛熊拐点 ④资金进出强弱。**不是**持仓页的「今日活跃持仓市值」（曾误实现过一次，已回退，勿再犯）。
 - **实现口径**：拿不到全市场逐股浮动筹码数据，用**指数近 10 日成交额滚动合计**作活跃资金代理（死筹不产生成交额）。数据来自东财日 K `f57` 成交额（`fetchKline` fields2 已含 f57，`KlineCandle.amount` 可选——个别海外指数缺失）。
 - 纯函数、look-ahead 安全：`computeAmvSeries`（滚动合计）+ `analyzeAmv`（近5日趋势 / 近20日指数-AMV 同步象限 / 近30vs前30日极值背离）。**盘中要先 `dropUnfinishedToday(candles, secid)` 剔除未收盘当日 K 线**（当日成交额不完整会让末点失真下坠）——按 secid 所属市场收盘时间判定（A 股 15:00 / 港股 16:00 / 日经北京 14:00；未识别市场交易日内一律剔除当日），**必须传 secid**（早期只处理 A 股，港股/日经盘中会误报信号）。东财 kline 在 `beg=0` 时**忽略 lmt 返回 1990 至今全量(~8600 点)**，面板/摘要条算 AMV 前 `slice(-160)` 截尾（否则默认视图跨 36 年、近期趋势被压平）。
-- 接入点：指数详情 `/index/[secid]`（完整面板：双轴图+研判+口诀）、`/market` 沪指摘要条（服务端组件，失败整条隐藏）。
-- 与 predict()/meihua 相互独立，不并入基金打分；面板免责声明（「勿单独作为买卖依据/不构成投资建议」）不可删。仅反映短线活跃资金，长线锁筹品种参考意义有限。
+- 接入点：
+  - **独立板块 `/amv`（AmvBoard，主入口，参考指南针 0AMV 板块）**：值+日涨跌 / 日周月走势 / 今日实时两市成交额 / 涨跌家数 / 研判。数据 `buildAmvBoard()`（eastmoney.ts，**两市＝沪指+深成指成交额合计**作活跃资金、沪指做参考指数与剔除口径；深市 K 线整体抓不到时退化为仅沪市并置 `coverage:"sh-only"`，UI 注明「仅沪市（深市暂缺）」不静默冒充两市）→ `/api/amv`(revalidate 15) → 客户端交易时段 30s 轮询。入口＝`/market` 顶部 `AmvStrip` **客户端**入口卡（fetch `/api/amv` + 60s 轮询、与板块同口径 buildAmvBoard，点进 `/amv`；数据未就绪/失败整条隐藏）。`AmvTrendChart` 按数据签名门控 setOption，轮询同值不重绘（保留用户缩放）；`indexLabel` prop 让单指数面板不误标「沪指点位」。
+  - 指数详情 `/index/[secid]` 的 `AmvPanel`：单个指数视角的活跃市值（自取该指数日 K），与大盘板块并存。
+- **数据保真度（用户已明确 2026-07-21）**：指南针的 0AMV 是专有合成指数（逐股实时活跃度、有自己 OHLC 蜡烛），公开接口拿不到其原始序列/公式。本项目是**公开成交额估算版**（每天单值→折线，非蜡烛；分时/五日不做），**数值不等同指南针**——`AmvVerdict estimateNote` 已注明，勿去掉该说明。
+- 共用组件：`AmvTrendChart`(双轴折线，日/周/月共用)、`AmvVerdict`(依据+口诀+免责)。`resampleAmv` 把日线重采样为周/月线。
+- 与 predict()/meihua 相互独立，不并入基金打分；免责声明（「勿单独作为买卖依据/不构成投资建议」）不可删。仅反映短线活跃资金，长线锁筹品种参考意义有限。
 
 ## 应用结构与功能现状（底部 Tab 布局，养基宝风格）
 

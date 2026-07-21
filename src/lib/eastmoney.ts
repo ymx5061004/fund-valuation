@@ -5,6 +5,7 @@
 // ⚠️ 这些是非官方、未公开文档的接口，可能随时变更或限流，正式商用建议改用持牌数据源。
 
 import type {
+  AmvBoard,
   ConstituentStock,
   Fund,
   FundMeta,
@@ -12,11 +13,13 @@ import type {
   IndexDetail,
   IndexQuote,
   KlineCandle,
+  MarketBreadth,
   NavPoint,
   QuoteMetrics,
   RankSort,
 } from "./types";
 import { fetchSinaEstimates, fetchTencentIndices } from "./backup-sources";
+import { AMV_BOARD_HISTORY, amvChange, analyzeAmv, computeAmvSeries, dropUnfinishedToday, isAShareTradingNow } from "./amv";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -593,13 +596,79 @@ async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: num
   }
 }
 
-/** K 线：klt 101日/102周/103月。 */
+/** K 线：klt 101日/102周/103月。两个 host 都失败时用进程内 24h 旧值兜底
+ *  （日频数据、旧值可接受；防东财瞬时限流/网络抖动让 K 线图与活跃市值板块整片空白）。 */
 export async function fetchKline(secid: string, klt: number, lmt = 120): Promise<KlineCandle[]> {
-  return (
+  const cacheKey = `kline:${secid}:${klt}`;
+  const candles =
     (await fetchKlineFrom("push2his.eastmoney.com", secid, klt, lmt)) ??
-    (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt)) ??
-    []
-  );
+    (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt));
+  if (candles && candles.length > 0) return remember(cacheKey, candles);
+  return recall<KlineCandle[]>(cacheKey, STALE_HISTORY_MS) ?? [];
+}
+
+// ---- 活跃市值 0AMV 板块（大盘活跃资金，公开成交额估算版；见 lib/amv.ts）----
+
+/** 两市涨跌家数（活跃市值板块的市场宽度）。上游不支持/失败返回 null，UI 据此隐藏。 */
+export async function fetchMarketBreadth(): Promise<MarketBreadth | null> {
+  try {
+    // ulist.np 一次取沪深两市指数的涨跌家数字段（f104 上涨 / f105 下跌 / f106 平盘），求和
+    const url = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=1.000001,0.399001&fields=f104,f105,f106`;
+    const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 15 } }, 3000);
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as { data?: { diff?: { f104?: number; f105?: number; f106?: number }[] } };
+    const diff = json.data?.diff;
+    if (!diff?.length) return null;
+    let up = 0,
+      down = 0,
+      flat = 0;
+    for (const d of diff) {
+      up += Number(d.f104) || 0;
+      down += Number(d.f105) || 0;
+      flat += Number(d.f106) || 0;
+    }
+    return up + down + flat > 0 ? { up, flat, down } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 组装活跃市值板块数据：两市（沪指+深成指）成交额合计作活跃资金，沪指做参考指数与剔除口径。
+ *  /api/amv 与 /market 入口卡（AmvStrip）共用，保证两处数值口径一致。上游不足返回 null。 */
+export async function buildAmvBoard(): Promise<AmvBoard | null> {
+  // lmt 传 800：东财 kline 在 beg=0 时实际忽略 lmt 返回全量历史（实测），此处显式给足以防上游某日改为遵守 lmt
+  // 时周/月视图缺数据（AMV_BOARD_HISTORY=750 需 ~760 根日 K）
+  const [sh, sz, breadth] = await Promise.all([
+    fetchKline("1.000001", 101, 800),
+    fetchKline("0.399001", 101, 800),
+    fetchMarketBreadth(),
+  ]);
+  if (sh.length === 0) return null; // 沪指历史都拿不到则整体失败
+  // 深市整体抓取失败（sz=[]）时退化为仅沪市：值会偏低，用 coverage 标注让 UI 诚实提示，不静默冒充「两市」
+  const coverage: "both" | "sh-only" = sz.length > 0 ? "both" : "sh-only";
+  const szAmount = new Map(sz.map((c) => [c.date, c.amount ?? 0]));
+  // 合成候选：沪指 K 线（含 close 作参考指数）+ 两市成交额合计（深市缺该日则只计沪市）
+  const combined: KlineCandle[] = sh.map((c) => ({ ...c, amount: (c.amount ?? 0) + (szAmount.get(c.date) ?? 0) }));
+  const dropped = dropUnfinishedToday(combined, "1.000001");
+  // 今日实时两市成交额：仅当今日 K 线因未收盘被剔除时，取原始末根（今日累计成交额）
+  const rawLast = combined[combined.length - 1];
+  const todayAmount = dropped.length < combined.length && rawLast ? rawLast.amount ?? null : null;
+  const points = computeAmvSeries(dropped).slice(-AMV_BOARD_HISTORY);
+  const analysis = analyzeAmv(points);
+  const chg = amvChange(points);
+  if (!analysis || !chg) return null;
+  return {
+    value: chg.value,
+    change: chg.change,
+    changePct: chg.changePct,
+    date: chg.date,
+    todayAmount,
+    coverage,
+    tradingNow: isAShareTradingNow(),
+    analysis,
+    points,
+    breadth,
+  };
 }
 
 // ---- 指数成分股（按市场涨跌幅榜，覆盖主要 A 股指数）----

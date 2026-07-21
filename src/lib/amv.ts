@@ -7,6 +7,9 @@
 
 import type { AmvAnalysis, AmvPoint, KlineCandle, Signal } from "@/lib/types";
 
+/** 板块详情返回给客户端的日线上限（≈3 年交易日）：够月视图(36)/周视图(150)/日视图(slice 160)，又不至传全量 */
+export const AMV_BOARD_HISTORY = 750;
+
 /** 活跃市值滚动窗口（交易日）：近 10 日成交额合计 ≈ 一轮完整换手的活跃资金体量 */
 export const AMV_WINDOW = 10;
 /** 趋势观察窗（交易日）：指数 vs 活跃市值的同步性按近 20 日对比 */
@@ -171,4 +174,41 @@ export function formatAmountCN(v: number): string {
   if (v >= 1e8) return `${(v / 1e8).toFixed(2)}亿`;
   if (v >= 1e4) return `${(v / 1e4).toFixed(2)}万`;
   return v.toFixed(0);
+}
+
+/** 活跃市值日涨跌（相对上一交易日）。样本不足返回 null。 */
+export function amvChange(points: AmvPoint[]): { value: number; change: number; changePct: number; date: string } | null {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1];
+  const prev = points[points.length - 2];
+  const change = last.amv - prev.amv;
+  return { value: last.amv, change, changePct: prev.amv > 0 ? (change / prev.amv) * 100 : 0, date: last.date };
+}
+
+/** 把日线活跃市值序列重采样为周/月线（取每组最后一个交易日的值作为该周期收盘）。
+ *  日频估算无 OHLC，周/月视图同为折线；仅降低频率、不改口径。 */
+export function resampleAmv(points: AmvPoint[], period: "week" | "month"): AmvPoint[] {
+  const keyOf = (d: string): string => {
+    if (period === "month") return d.slice(0, 7); // YYYY-MM
+    const [y, m, day] = d.split("-").map(Number);
+    const dt = new Date(y, m - 1, day);
+    const jan1 = new Date(y, 0, 1);
+    const week = Math.ceil(((dt.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7);
+    return `${y}-W${week}`;
+  };
+  const out: AmvPoint[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const nextKey = i + 1 < points.length ? keyOf(points[i + 1].date) : null;
+    if (keyOf(points[i].date) !== nextKey) out.push(points[i]); // 组内最后一根 = 周期收盘
+  }
+  return out;
+}
+
+/** 当前是否 A 股交易时段（北京时间周一~五 9:30–11:30 / 13:00–15:00）。服务端可用（Date.now，非工作流脚本）。 */
+export function isAShareTradingNow(): boolean {
+  const bj = new Date(Date.now() + 8 * 3600000);
+  const day = bj.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const m = bj.getUTCHours() * 60 + bj.getUTCMinutes();
+  return (m >= 9 * 60 + 30 && m <= 11 * 60 + 30) || (m >= 13 * 60 && m <= 15 * 60);
 }
