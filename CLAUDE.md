@@ -158,7 +158,7 @@ src/
 ## 开发 / 部署 / Git
 
 - `npm run dev`（开发） / `npm run build`（= Vercel 的构建命令，提交前务必跑通：含 TS 类型检查 + lint）。
-- 部署：GitHub 仓库导入 Vercel；`vercel.json` 已设 `regions: ["hkg1"]`（函数落香港区，就近访问国内接口）。
+- 部署：GitHub 仓库导入 Vercel；`vercel.json` 设 `regions: ["sin1"]`（原 hkg1 就近访问国内接口，2026-07-22 东财对 hkg1 出口 IP 的 kline 接口封禁数小时、其余接口正常，切 sin1 换出口 IP 池绕开；若 sin1 也被封可再切 hnd1/icn1，勿只盯一个区）。
 - 远程仓库：`github.com/ymx5061004/fund-valuation`（分支 main）。
 - **提交身份**：作者用 `ymx5061004 <ymx5061004@163.com>`（本地 git config 已设），保留 `Co-Authored-By: Claude` 标记。别再用 admin@dl-rw.com（会错误归属到 dalianRW 账号）。
 
