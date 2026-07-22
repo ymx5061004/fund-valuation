@@ -18,7 +18,7 @@ import type {
   QuoteMetrics,
   RankSort,
 } from "./types";
-import { fetchSinaEstimates, fetchSinaKline, fetchTencentIndices } from "./backup-sources";
+import { fetchSinaEstimates, fetchSinaKline, fetchTencentIndices, fetchTencentKline } from "./backup-sources";
 import { AMV_BOARD_HISTORY, amvChange, analyzeAmv, computeAmvIndex, dropUnfinishedToday, isAShareTradingNow } from "./amv";
 
 const HEADERS = {
@@ -613,10 +613,11 @@ export async function fetchKline(secid: string, klt: number, lmt = 120, beg: num
     (await fetchKlineFrom("push2his.eastmoney.com", secid, klt, lmt, beg)) ??
     (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt, beg));
   if (candles && candles.length > 0) return remember(cacheKey, candles);
-  // 新浪日 K 备源（仅 A 股 + 日 K；无成交额，额类指标由 UI 降级）——东财曾对数据中心 IP 段封 kline
+  // 日 K 备源链（仅 A 股 + 日 K；均无成交额，额类指标由 UI 降级）——东财曾对数据中心 IP 段封 kline。
+  // 腾讯优先：CDN 全球分发、Vercel 可达；新浪对海外数据中心 IP 实测超时，仅本机/国内环境兜得住
   if (klt === 101) {
-    const sina = await fetchSinaKline(secid);
-    if (sina && sina.length > 0) return remember(cacheKey, sina);
+    const backup = (await fetchTencentKline(secid)) ?? (await fetchSinaKline(secid));
+    if (backup && backup.length > 0) return remember(cacheKey, backup);
   }
   remember(`kline-neg:${cacheKey}`, true);
   return recall<KlineCandle[]>(cacheKey, STALE_HISTORY_MS) ?? [];

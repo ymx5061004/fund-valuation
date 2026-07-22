@@ -36,18 +36,39 @@ export async function GET(request: Request) {
       }
     }),
   );
-  // 新浪备源连通性
-  const t0 = Date.now();
-  let sina: Record<string, unknown>;
-  try {
-    const res = await fetch(
+  // 备源连通性：新浪 + 腾讯
+  const probe = async (name: string, url: string, referer: string, extract: (t: string) => unknown) => {
+    const t0 = Date.now();
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": HEADERS["User-Agent"], Referer: referer },
+        cache: "no-store",
+        signal: AbortSignal.timeout(5000),
+      });
+      return { name, status: res.status, ms: Date.now() - t0, sample: extract(await res.text()) };
+    } catch (e) {
+      return { name, status: 0, ms: Date.now() - t0, error: String(e).slice(0, 120) };
+    }
+  };
+  const [sina, tencent] = await Promise.all([
+    probe(
+      "sina",
       "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=sh000001&scale=240&ma=no&datalen=3",
-      { headers: { "User-Agent": HEADERS["User-Agent"], Referer: "https://finance.sina.com.cn" }, cache: "no-store", signal: AbortSignal.timeout(5000) },
-    );
-    const rows = JSON.parse(await res.text()) as { day: string; close: string }[];
-    sina = { status: res.status, ms: Date.now() - t0, rows: rows.length, last: rows[rows.length - 1] ?? null };
-  } catch (e) {
-    sina = { status: 0, ms: Date.now() - t0, error: String(e).slice(0, 120) };
-  }
-  return NextResponse.json({ at: new Date().toISOString(), results, sina });
+      "https://finance.sina.com.cn",
+      (t) => {
+        const rows = JSON.parse(t) as { day: string }[];
+        return { rows: rows.length, last: rows[rows.length - 1] ?? null };
+      },
+    ),
+    probe(
+      "tencent",
+      "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000001,day,,,3,qfq",
+      "https://gu.qq.com/",
+      (t) => {
+        const rows = (JSON.parse(t) as { data?: { sh000001?: { day?: string[][] } } }).data?.sh000001?.day;
+        return { rows: rows?.length ?? 0, last: rows?.[rows.length - 1] ?? null };
+      },
+    ),
+  ]);
+  return NextResponse.json({ at: new Date().toISOString(), results, sina, tencent });
 }

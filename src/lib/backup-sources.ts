@@ -141,6 +141,52 @@ export async function fetchTencentIndices(secids: string[]): Promise<IndexQuote[
 }
 
 /**
+ * 腾讯日 K 线备源（优先于新浪：腾讯 CDN 全球分发，Vercel 数据中心 IP 可达性更好；
+ * 新浪 quotes.sina.cn 实测对海外数据中心 IP 超时）。仅 A 股 + 日 K。
+ * 返回 data[symbol].day = [[日期,开,收,高,低,量],...]，**量已是「手」**与东财 f56 同单位；无成交额。
+ */
+export async function fetchTencentKline(secid: string, count = 900): Promise<KlineCandle[] | null> {
+  const [mkt, code] = secid.split(".");
+  if ((mkt !== "0" && mkt !== "1") || !/^\d{6}$/.test(code ?? "")) return null;
+  const symbol = `${mkt === "1" ? "sh" : "sz"}${code}`;
+  try {
+    const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,${count},qfq`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Referer: "https://gu.qq.com/" },
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const json = JSON.parse(await res.text()) as {
+      data?: Record<string, { day?: string[][]; qfqday?: string[][] }>;
+    };
+    const rows = json.data?.[symbol]?.day ?? json.data?.[symbol]?.qfqday;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const out: KlineCandle[] = [];
+    for (const r of rows) {
+      // 字段序：[0]日期 [1]开 [2]收 [3]高 [4]低 [5]量(手)
+      const open = Number(r[1]);
+      const close = Number(r[2]);
+      const high = Number(r[3]);
+      const low = Number(r[4]);
+      const vol = Number(r[5]);
+      if (!r[0] || !Number.isFinite(close) || close <= 0) continue;
+      out.push({
+        date: r[0],
+        open,
+        close,
+        high,
+        low,
+        ...(Number.isFinite(vol) && vol > 0 ? { volume: vol } : {}),
+      });
+    }
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 新浪日 K 线备源（东财 kline 被封/限流时用，2026-07-22 东财曾对数据中心 IP 段封 kline 数小时）。
  * 仅支持 A 股类 secid（1.→sh / 0.→sz）与日 K；返回 UTF JSON 数组 [{day,open,high,low,close,volume}]。
  * ⚠️ 口径差异：volume 单位是「股」，÷100 归一到与东财 f56 相同的「手」；**没有成交额字段**——

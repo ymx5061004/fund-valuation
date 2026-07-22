@@ -44,7 +44,7 @@
 | 盘中估值 | fundgz（逐只） | 新浪 `hq.sinajs.cn/list=fu_{code},...`（**一次批量**，字段[2]估值 [3]昨净值 [6]估值涨幅% 语义与 gsz/gszzl 等价） |
 | 指数行情 | push2→push2delay | 腾讯 `qt.gtimg.cn/q=sh000001,...`（个别缺失也用它**补齐**；无日经225） |
 | 历史净值 | pingzhongdata | 无备源——用进程内 24h 旧值兜底 |
-| 指数日K | push2his→push2 | 新浪 `quotes.sina.cn .../getKLineData?symbol=sh000001&scale=240`（**仅A股+日K**；UTF JSON；volume 单位**股÷100=手**对齐 f56；**无成交额**→额类指标 UI 检测缺失后隐藏降级。2026-07-22 东财曾对数据中心 IP 段封 kline 数小时而其余接口正常，此备源即为此而加） |
+| 指数日K | push2his→push2 | ①腾讯 `web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000001,day,,,900,qfq`（data[sym].day=[日期,开,收,高,低,量(**手**)]；CDN 全球分发 Vercel 可达）→ ②新浪 `quotes.sina.cn .../getKLineData?scale=240`（volume **股÷100=手**；对海外数据中心 IP 实测超时，本机/国内兜底）。均**仅A股+日K、无成交额**→额类指标 UI 检测缺失后隐藏降级。2026-07-22 东财对数据中心 IP 段封 kline 数小时而其余接口正常，备源为此而加 |
 
 - 新浪必须带 `Referer: finance.sina.com.cn`；新浪/腾讯返回 **GBK**，用 `TextDecoder("gb18030")` 解码（数字是 ASCII，解码失败可退化）。
 - **腾讯基金估值接口 fundSsgz 已冻结**（数据停在 2023-08，实测确认），勿接入。
