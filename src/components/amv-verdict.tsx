@@ -27,9 +27,11 @@ export function AmvVerdict({ analysis, estimateNote = false }: { analysis: AmvAn
       </div>
 
       <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-950/40 dark:text-amber-500">
-        活跃市值以近{AMV_WINDOW}日成交额滚动合计近似「参与交易的活跃资金」，为大盘趋势先行参考——请结合 K
-        线、筹码与板块热度综合研判，勿单独作为买卖依据；对筹码长期锁定的长线品种参考意义有限。
-        {estimateNote && "本板块为公开成交额估算，与指南针等专有 0AMV 算法不同、数值不等同。"}
+        {estimateNote
+          ? `活跃筹码市值指数以近${AMV_WINDOW}日两市成交量（活跃筹码代理——死筹不换手）×沪指价格合成，为大盘趋势先行参考——`
+          : `活跃市值以近${AMV_WINDOW}日成交额滚动合计近似「参与交易的活跃资金」，为大盘趋势先行参考——`}
+        请结合 K 线、筹码与板块热度综合研判，勿单独作为买卖依据；对筹码长期锁定的长线品种参考意义有限。
+        {estimateNote && "数值为公开数据估算的定标点数，与指南针等专有 0AMV 算法不同、数值不等同。"}
         <strong>不构成投资建议</strong>，市场有风险。
       </p>
     </>

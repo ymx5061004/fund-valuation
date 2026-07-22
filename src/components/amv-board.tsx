@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AmvBoard as AmvBoardData, AmvCandle } from "@/lib/types";
-import { buildAmvCandles, formatAmountCN } from "@/lib/amv";
+import { aggregateAmvCandles, formatAmountCN } from "@/lib/amv";
 import { isAShareTradingTime, usePolling } from "@/lib/use-polling";
 import { changeColor, cn } from "@/lib/utils";
 import { SignalBadge } from "@/components/ui/badge";
@@ -68,13 +68,13 @@ export function AmvBoard() {
     { activeMs: 30000, idleMs: 300000, isActive: pollActive, key: "amv" },
   );
 
-  // 选中频率的蜡烛：日K取近 160 根（开=前日值），周/月K为日值聚合（真实高低）。
+  // 选中频率的蜡烛：服务端给日线真 OHLC 蜡烛，周/月K客户端聚合（残缺首组已在聚合内丢弃）。
   // useMemo 依赖 [d, tab]：轮询拿到同值时图表由 AmvKlineChart 的签名门控跳过重绘（不复位缩放）
   const candles: AmvCandle[] = useMemo(() => {
     if (!d) return [];
-    if (tab === "日") return buildAmvCandles(d.points.slice(-161), "day");
-    if (tab === "周") return buildAmvCandles(d.points, "week").slice(-120);
-    return buildAmvCandles(d.points, "month");
+    if (tab === "日") return d.candles.slice(-160);
+    if (tab === "周") return aggregateAmvCandles(d.candles, "week").slice(-120);
+    return aggregateAmvCandles(d.candles, "month");
   }, [d, tab]);
 
   return (
@@ -85,7 +85,7 @@ export function AmvBoard() {
         </button>
         <div className="flex-1 text-center">
           <div className="text-base font-semibold text-zinc-900 dark:text-zinc-50">活跃市值 0AMV</div>
-          <div className="text-xs text-zinc-400">大盘活跃资金 · 成交额估算</div>
+          <div className="text-xs text-zinc-400">活跃筹码市值指数 · 公开数据估算</div>
         </div>
         <span className="w-5" />
       </header>
@@ -95,11 +95,11 @@ export function AmvBoard() {
       ) : (
         <>
           <section className="px-4 pb-3">
-            <div className={cn("text-3xl font-bold tabular-nums", changeColor(d.change))}>{formatAmountCN(d.value)}</div>
+            <div className={cn("text-3xl font-bold tabular-nums", changeColor(d.change))}>{d.value.toFixed(1)}</div>
             <div className={cn("mt-0.5 flex items-center gap-2 text-sm font-medium tabular-nums", changeColor(d.change))}>
               <span>
-                {d.change >= 0 ? "+" : "-"}
-                {formatAmountCN(Math.abs(d.change))}
+                {d.change >= 0 ? "+" : ""}
+                {d.change.toFixed(1)}
               </span>
               <span>{fmtPct(d.changePct)}</span>
               <SignalBadge signal={d.analysis.signal} className="ml-1" />
@@ -113,6 +113,7 @@ export function AmvBoard() {
               <Stat label="近5日" value={fmtPct(d.analysis.trend5Pct)} valueClass={changeColor(d.analysis.trend5Pct)} />
               <Stat label="近20日" value={fmtPct(d.analysis.amv20Pct)} valueClass={changeColor(d.analysis.amv20Pct)} />
               <Stat label="沪指20日" value={fmtPct(d.analysis.index20Pct)} valueClass={changeColor(d.analysis.index20Pct)} />
+              <Stat label="10日额" value={formatAmountCN(d.turnover10)} />
               {d.todayAmount != null && <Stat label="今日额" value={formatAmountCN(d.todayAmount)} />}
               {d.breadth && (
                 <>
@@ -146,10 +147,8 @@ export function AmvBoard() {
               <>
                 <AmvKlineChart data={candles} />
                 <p className="px-2 pt-1 text-[11px] text-zinc-400">
-                  {tab === "日"
-                    ? "日K为估算蜡烛：开=前日值、收=当日值（每日仅一个收盘级数值，无盘中高低）"
-                    : `${tab}K 由日值聚合：开=首日、收=末日、高低=期内极值`}
-                  　· 副图为两市成交额
+                  蜡烛＝活跃筹码市值指数：近10日两市成交量（活跃筹码代理）×沪指当日
+                  开/高/低/收，定标为指数点数（非金额）· 副图为两市成交额
                 </p>
               </>
             ) : (

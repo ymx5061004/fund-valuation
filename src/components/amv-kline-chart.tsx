@@ -10,9 +10,14 @@ const AXIS = "#a1a1aa";
 const SPLIT = "rgba(113,113,122,0.12)";
 const MA_COLORS: [string, string, string] = ["#f59e0b", "#8b5cf6", "#2563eb"]; // MA5/10/20
 
-/** 亿元数值格式化：≥万亿显示 x.xx万亿，否则 x亿 */
+/** 亿元数值格式化（成交额副图用）：≥万亿显示 x.xx万亿，否则 x亿 */
 function fmtYi(v: number): string {
   return v >= 10000 ? `${(v / 10000).toFixed(2)}万亿` : `${v.toFixed(0)}亿`;
+}
+
+/** 指数点数格式化（主图用）：坐标轴紧凑（xx.x万），tooltip 保留 1 位小数原值 */
+function fmtPts(v: number): string {
+  return v.toFixed(1);
 }
 
 function movingAverage(values: number[], period: number): (number | null)[] {
@@ -55,9 +60,9 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
     sigRef.current = sig;
 
     const dates = data.map((d) => d.date);
-    // 主图用「亿」为单位，避免 13 位原始数值撑爆坐标轴
-    const candles = data.map((d) => [d.open / 1e8, d.close / 1e8, d.low / 1e8, d.high / 1e8]);
-    const closesYi = data.map((d) => d.close / 1e8);
+    // 主图＝活跃筹码市值指数（点数，已定标）；副图＝成交额（亿元）
+    const candles = data.map((d) => [d.open, d.close, d.low, d.high].map((v) => Number(v.toFixed(1))));
+    const closes = data.map((d) => d.close);
     const vols = data.map((d) => ({
       value: d.amount / 1e8,
       itemStyle: { color: d.close >= d.open ? RED : GREEN, opacity: 0.65 },
@@ -86,8 +91,8 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
             const pctColor = pct >= 0 ? RED : GREEN;
             return (
               `${d.date}<br/>` +
-              `开 ${fmtYi(d.open / 1e8)}　收 ${fmtYi(d.close / 1e8)}<br/>` +
-              `高 ${fmtYi(d.high / 1e8)}　低 ${fmtYi(d.low / 1e8)}<br/>` +
+              `开 ${fmtPts(d.open)}　收 ${fmtPts(d.close)}<br/>` +
+              `高 ${fmtPts(d.high)}　低 ${fmtPts(d.low)}<br/>` +
               `涨跌 <span style="color:${pctColor}">${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%</span>　额 ${fmtYi(d.amount / 1e8)}`
             );
           },
@@ -124,8 +129,8 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
             gridIndex: 0,
             scale: true,
             splitLine: { lineStyle: { color: SPLIT } },
-            // 紧凑格式（1 位小数）：标签须放进固定 left=66 内，两 grid 才能对齐
-            axisLabel: { color: AXIS, formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万亿` : `${Math.round(v)}亿`) },
+            // 紧凑格式：指数点数 ≥1万 显示 xx.x万，标签须放进固定 left=66 内，两 grid 才能对齐
+            axisLabel: { color: AXIS, formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万` : `${Math.round(v)}`) },
           },
           {
             type: "value",
@@ -154,7 +159,7 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
             type: "line" as const,
             xAxisIndex: 0,
             yAxisIndex: 0,
-            data: movingAverage(closesYi, p),
+            data: movingAverage(closes, p),
             showSymbol: false,
             smooth: true,
             lineStyle: { width: 1, color: MA_COLORS[i] },

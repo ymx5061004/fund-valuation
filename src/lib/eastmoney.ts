@@ -19,7 +19,7 @@ import type {
   RankSort,
 } from "./types";
 import { fetchSinaEstimates, fetchTencentIndices } from "./backup-sources";
-import { AMV_BOARD_HISTORY, amvChange, analyzeAmv, computeAmvSeries, dropUnfinishedToday, isAShareTradingNow } from "./amv";
+import { AMV_BOARD_HISTORY, amvChange, analyzeAmv, computeAmvIndex, dropUnfinishedToday, isAShareTradingNow } from "./amv";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -571,8 +571,8 @@ export async function fetchIndexDetail(secid: string): Promise<IndexDetail | nul
 
 async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: number, beg: number | string): Promise<KlineCandle[] | null> {
   try {
-    // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低 f57 成交额（活跃市值 0AMV 计算用）
-    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=${beg}&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55,f57`;
+    // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低 f56 成交量(手) f57 成交额（活跃市值 0AMV 计算用）
+    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=${beg}&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55,f56,f57`;
     const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 300 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { klines?: string[] } };
@@ -580,14 +580,16 @@ async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: num
     if (!klines) return null;
     return klines.map((k) => {
       const p = k.split(",");
-      const amount = Number(p[5]);
+      const volume = Number(p[5]);
+      const amount = Number(p[6]);
       return {
         date: p[0],
         open: Number(p[1]),
         close: Number(p[2]),
         high: Number(p[3]),
         low: Number(p[4]),
-        // 个别指数无成交额（返回 "-"）→ 不带 amount 字段，amv 计算会整体跳过
+        // 个别指数无量额（返回 "-"）→ 不带该字段，amv 计算会整体跳过
+        ...(Number.isFinite(volume) && volume > 0 ? { volume } : {}),
         ...(Number.isFinite(amount) && amount > 0 ? { amount } : {}),
       };
     });
@@ -654,27 +656,36 @@ export async function buildAmvBoard(): Promise<AmvBoard | null> {
   if (sh.length === 0) return recall<AmvBoard>("amv:board", STALE_LIVE_MS); // 沪指都拿不到则整体失败→旧板兜底
   // 深市整体抓取失败（sz=[]）时退化为仅沪市：值会偏低，用 coverage 标注让 UI 诚实提示，不静默冒充「两市」
   const coverage: "both" | "sh-only" = sz.length > 0 ? "both" : "sh-only";
-  const szAmount = new Map(sz.map((c) => [c.date, c.amount ?? 0]));
-  // 合成候选：沪指 K 线（含 close 作参考指数）+ 两市成交额合计（深市缺该日则只计沪市）
-  const combined: KlineCandle[] = sh.map((c) => ({ ...c, amount: (c.amount ?? 0) + (szAmount.get(c.date) ?? 0) }));
+  const szByDate = new Map(sz.map((c) => [c.date, c]));
+  // 合成候选：沪指 K 线（价格 OHLC 作指数基准）+ 两市成交量/额合计（深市缺该日则只计沪市）
+  const combined: KlineCandle[] = sh.map((c) => {
+    const s = szByDate.get(c.date);
+    return { ...c, volume: (c.volume ?? 0) + (s?.volume ?? 0), amount: (c.amount ?? 0) + (s?.amount ?? 0) };
+  });
   const dropped = dropUnfinishedToday(combined, "1.000001");
   // 今日实时两市成交额：仅当今日 K 线因未收盘被剔除时，取原始末根（今日累计成交额）
   const rawLast = combined[combined.length - 1];
   const todayAmount = dropped.length < combined.length && rawLast ? rawLast.amount ?? null : null;
-  const points = computeAmvSeries(dropped).slice(-AMV_BOARD_HISTORY);
+  // 活跃筹码市值指数（真 OHLC 蜡烛）+ 研判序列
+  const idx = computeAmvIndex(dropped);
+  const candles = idx.candles.slice(-AMV_BOARD_HISTORY);
+  const points = idx.points.slice(-AMV_BOARD_HISTORY);
   const analysis = analyzeAmv(points);
   const chg = amvChange(points);
   if (!analysis || !chg) return recall<AmvBoard>("amv:board", STALE_LIVE_MS);
+  // 「活跃资金」金额口径副指标：近10日两市成交额合计
+  const turnover10 = dropped.slice(-10).reduce((s, c) => s + (c.amount ?? 0), 0);
   const board: AmvBoard = {
     value: chg.value,
     change: chg.change,
     changePct: chg.changePct,
     date: chg.date,
     todayAmount,
+    turnover10,
     coverage,
     tradingNow: isAShareTradingNow(),
     analysis,
-    points,
+    candles,
     breadth,
   };
   // 只记忆完整两市板；仅沪市的降级板优先让位给近期完整板（防值腰斩跳变），实在没有再如实降级展示

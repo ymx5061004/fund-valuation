@@ -187,7 +187,7 @@ export function amvChange(points: AmvPoint[]): { value: number; change: number; 
   return { value: last.amv, change, changePct: prev.amv > 0 ? (change / prev.amv) * 100 : 0, date: last.date };
 }
 
-/** 周/月分组键：月=YYYY-MM；周=年内周号（resampleAmv 与 buildAmvCandles 共用，口径必须一致） */
+/** 周/月分组键：月=YYYY-MM；周=年内周号（aggregateAmvCandles 分组用） */
 function periodKey(d: string, period: "week" | "month"): string {
   if (period === "month") return d.slice(0, 7); // YYYY-MM
   const [y, m, day] = d.split("-").map(Number);
@@ -197,41 +197,48 @@ function periodKey(d: string, period: "week" | "month"): string {
   return `${y}-W${week}`;
 }
 
-/** 把日线活跃市值序列重采样为周/月线（取每组最后一个交易日的值作为该周期收盘）。
- *  仅降低频率、不改口径（单指数面板的对比折线用）。 */
-export function resampleAmv(points: AmvPoint[], period: "week" | "month"): AmvPoint[] {
-  const out: AmvPoint[] = [];
-  for (let i = 0; i < points.length; i++) {
-    const nextKey = i + 1 < points.length ? periodKey(points[i + 1].date, period) : null;
-    if (periodKey(points[i].date, period) !== nextKey) out.push(points[i]); // 组内最后一根 = 周期收盘
+/** 活跃筹码市值指数的定标常数：仅让数值落在十万点量级（与指南针同量级），无量纲、不代表金额 */
+export const AMV_INDEX_SCALE = 1e8;
+
+/** 活跃筹码市值指数（板块蜡烛口径，用户 2026-07-22 确认换模型要真K线）：
+ *  近 window 日成交量合计（活跃筹码代理——死筹不换手）× 当日指数 开/高/低/收 ÷ AMV_INDEX_SCALE。
+ *  指数价格有真实盘中 OHLC → 日K 带真实影线/跳空。简化：当日 OHLC 统一乘当日收盘后的完整量窗
+ *  （盘中未收盘 K 线已由 dropUnfinishedToday 剔除，不引入 look-ahead）。
+ *  返回 candles（真 OHLC 蜡烛）与 points（收盘序列 + 指数收盘，供 analyzeAmv 研判背离）。 */
+export function computeAmvIndex(
+  candles: KlineCandle[],
+  window = AMV_WINDOW,
+): { candles: AmvCandle[]; points: AmvPoint[] } {
+  const usable = candles.filter((c) => typeof c.volume === "number" && c.volume > 0 && c.close > 0);
+  if (usable.length < window + 5) return { candles: [], points: [] };
+  const outCandles: AmvCandle[] = [];
+  const outPoints: AmvPoint[] = [];
+  let volSum = 0;
+  for (let i = 0; i < usable.length; i++) {
+    volSum += usable[i].volume as number;
+    if (i >= window) volSum -= usable[i - window].volume as number;
+    if (i < window - 1) continue;
+    const k = volSum / AMV_INDEX_SCALE;
+    const c = usable[i];
+    outCandles.push({
+      date: c.date,
+      open: k * c.open,
+      close: k * c.close,
+      high: k * c.high,
+      low: k * c.low,
+      amount: c.amount ?? 0,
+    });
+    outPoints.push({ date: c.date, amv: k * c.close, close: c.close, amount: c.amount ?? 0 });
   }
-  return out;
+  return { candles: outCandles, points: outPoints };
 }
 
-/** 日线活跃市值 → 蜡烛序列（估算口径，与指南针盘中逐笔蜡烛不同，UI 需注明）：
- *  - 日K：开=前日值 收=当日值（每天只有一个收盘级数值，无盘中高低 → 无影线），首日无前值跳过
- *  - 周/月K：日值聚合——开=组内首日 收=组内末日 高/低=组内极值（真实影线）；成交额=组内合计 */
-export function buildAmvCandles(points: AmvPoint[], period: "day" | "week" | "month"): AmvCandle[] {
-  if (period === "day") {
-    const out: AmvCandle[] = [];
-    for (let i = 1; i < points.length; i++) {
-      const open = points[i - 1].amv;
-      const close = points[i].amv;
-      out.push({
-        date: points[i].date,
-        open,
-        close,
-        high: Math.max(open, close),
-        low: Math.min(open, close),
-        amount: points[i].amount,
-      });
-    }
-    return out;
-  }
+/** 日蜡烛 → 周/月蜡烛：开=组内首根开 收=组内末根收 高/低=组内极值 额=组内合计。
+ *  输入通常是按固定根数截尾的序列（AMV_BOARD_HISTORY），首组大概率从周期中间开始——
+ *  其 开/高/低 只覆盖残段、数值失真，一律丢弃首组（与 dropUnfinishedToday 同哲学：宁少一根，不给失真值） */
+export function aggregateAmvCandles(dayCandles: AmvCandle[], period: "week" | "month"): AmvCandle[] {
   const out: AmvCandle[] = [];
-  let group: AmvPoint[] = [];
-  // 输入通常是按固定根数截尾的日线（AMV_BOARD_HISTORY），首组大概率从周期中间开始——
-  // 其 开/高/低 只覆盖残段、数值失真，一律丢弃首组（与 dropUnfinishedToday 同哲学：宁少一根，不给失真值）
+  let group: AmvCandle[] = [];
   let firstGroup = true;
   const flush = () => {
     if (group.length === 0) return;
@@ -240,21 +247,20 @@ export function buildAmvCandles(points: AmvPoint[], period: "day" | "week" | "mo
       group = [];
       return;
     }
-    const amvs = group.map((p) => p.amv);
     out.push({
       date: group[group.length - 1].date,
-      open: group[0].amv,
-      close: group[group.length - 1].amv,
-      high: Math.max(...amvs),
-      low: Math.min(...amvs),
-      amount: group.reduce((s, p) => s + p.amount, 0),
+      open: group[0].open,
+      close: group[group.length - 1].close,
+      high: Math.max(...group.map((c) => c.high)),
+      low: Math.min(...group.map((c) => c.low)),
+      amount: group.reduce((s, c) => s + c.amount, 0),
     });
     group = [];
   };
-  for (let i = 0; i < points.length; i++) {
-    group.push(points[i]);
-    const nextKey = i + 1 < points.length ? periodKey(points[i + 1].date, period) : null;
-    if (periodKey(points[i].date, period) !== nextKey) flush();
+  for (let i = 0; i < dayCandles.length; i++) {
+    group.push(dayCandles[i]);
+    const nextKey = i + 1 < dayCandles.length ? periodKey(dayCandles[i + 1].date, period) : null;
+    if (periodKey(dayCandles[i].date, period) !== nextKey) flush();
   }
   return out;
 }

@@ -36,6 +36,8 @@ export interface KlineCandle {
   close: number;
   high: number;
   low: number;
+  /** 成交量（手），活跃筹码市值指数计算用；个别海外指数可能缺失 */
+  volume?: number;
   /** 成交额（元），活跃市值(0AMV)计算用；个别海外指数可能缺失 */
   amount?: number;
 }
@@ -51,9 +53,9 @@ export interface AmvPoint {
   amount: number;
 }
 
-/** 活跃市值蜡烛（lib/amv.ts buildAmvCandles）。
- *  周/月K=日值聚合（开=首日 收=末日 高低=期内极值，真实影线）；
- *  日K=相邻两日推算（开=前日值 收=当日值，无盘中数据故无影线）——估算口径，与指南针盘中逐笔蜡烛不同 */
+/** 活跃筹码市值指数蜡烛（lib/amv.ts computeAmvIndex / aggregateAmvCandles）。
+ *  口径（用户 2026-07-22 确认换模型要真K线）：近10日成交量合计 × 当日指数 开/高/低/收 ÷ 定标常数——
+ *  指数价格有真实盘中 OHLC → 日K 带真实影线；周/月K 由日蜡烛聚合。数值为无量纲指数点数（非金额）。 */
 export interface AmvCandle {
   date: string;
   open: number;
@@ -71,11 +73,11 @@ export interface MarketBreadth {
   down: number;
 }
 
-/** 活跃市值「独立板块」详情数据（/api/amv，参考指南针 0AMV 板块，公开成交额估算版） */
+/** 活跃市值「独立板块」详情数据（/api/amv，参考指南针 0AMV 板块，公开数据估算的合成指数） */
 export interface AmvBoard {
-  /** 最新活跃市值（元，两市成交额10日滚动合计） */
+  /** 最新活跃筹码市值指数（点数：近10日两市成交量×沪指收盘÷定标常数） */
   value: number;
-  /** 较上一交易日变化（元） */
+  /** 较上一交易日变化（点数） */
   change: number;
   /** 较上一交易日变化 % */
   changePct: number;
@@ -83,14 +85,16 @@ export interface AmvBoard {
   date: string;
   /** 今日两市实时成交额（元）；仅盘中（当日 K 线被剔除）时有值，否则 null */
   todayAmount: number | null;
-  /** 成交额口径：both=沪深两市合计；sh-only=深市 K 线暂缺、仅沪市（绝对值偏低，UI 需注明） */
+  /** 近10日两市成交额合计（元）——「活跃资金」金额口径的副指标 */
+  turnover10: number;
+  /** 量额口径：both=沪深两市合计；sh-only=深市 K 线暂缺、仅沪市（绝对值偏低，UI 需注明） */
   coverage: "both" | "sh-only";
   /** 当前是否 A 股交易时段 */
   tradingNow: boolean;
   /** 研判 */
   analysis: AmvAnalysis;
-  /** 日线序列（活跃市值 + 沪指点位），最多近约 3 年，供日/周/月视图取用 */
-  points: AmvPoint[];
+  /** 日线真 OHLC 蜡烛序列（活跃筹码市值指数），最多近约 3 年，客户端聚合出周/月K */
+  candles: AmvCandle[];
   /** 两市涨跌家数；上游不支持时 null */
   breadth: MarketBreadth | null;
 }
@@ -100,7 +104,7 @@ export interface AmvAnalysis {
   signal: Signal;
   /** 状态短语，如「量价同步 · 上涨可持续」 */
   state: string;
-  /** 最新活跃市值（元） */
+  /** 最新活跃市值（随输入序列口径：面板为元、板块为指数点数） */
   amv: number;
   /** 活跃市值较 5 个交易日前变化 % */
   trend5Pct: number;

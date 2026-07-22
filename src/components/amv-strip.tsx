@@ -46,11 +46,11 @@ export function AmvStrip() {
           <SignalBadge signal={b.analysis.signal} />
         </div>
         <div className="mt-0.5 truncate text-xs text-zinc-400">
-          {b.analysis.state} · {b.coverage === "both" ? "大盘活跃资金（估算）" : "仅沪市（深市暂缺）"}
+          {b.analysis.state} · {b.coverage === "both" ? `10日额 ${formatAmountCN(b.turnover10)}` : "仅沪市（深市暂缺）"}
         </div>
       </div>
       <div className="ml-auto text-right">
-        <div className="text-base font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">{formatAmountCN(b.value)}</div>
+        <div className="text-base font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">{b.value.toFixed(1)}</div>
         <div className={cn("text-xs font-medium tabular-nums", changeColor(b.change))}>
           {b.changePct >= 0 ? "+" : ""}
           {b.changePct.toFixed(2)}%
