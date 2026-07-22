@@ -5,7 +5,7 @@
 // - 两家返回都是 GBK 编码，需 TextDecoder("gb18030") 解码（数字字段是 ASCII，解码失败也可退化使用）；
 // - 腾讯基金盘中估值接口 fundSsgz 已冻结（数据停在 2023-08），勿接入——估值备源用新浪 fu_。
 
-import type { IndexQuote } from "./types";
+import type { IndexQuote, KlineCandle } from "./types";
 import type { Estimate } from "./eastmoney";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
@@ -138,4 +138,48 @@ export async function fetchTencentIndices(secids: string[]): Promise<IndexQuote[
     });
   }
   return out;
+}
+
+/**
+ * 新浪日 K 线备源（东财 kline 被封/限流时用，2026-07-22 东财曾对数据中心 IP 段封 kline 数小时）。
+ * 仅支持 A 股类 secid（1.→sh / 0.→sz）与日 K；返回 UTF JSON 数组 [{day,open,high,low,close,volume}]。
+ * ⚠️ 口径差异：volume 单位是「股」，÷100 归一到与东财 f56 相同的「手」；**没有成交额字段**——
+ * 返回的 KlineCandle 不带 amount，额类指标（10日额/今日额/成交额副图）由 UI 侧检测缺失后隐藏降级。
+ */
+export async function fetchSinaKline(secid: string, datalen = 900): Promise<KlineCandle[] | null> {
+  const [mkt, code] = secid.split(".");
+  if ((mkt !== "0" && mkt !== "1") || !/^\d{6}$/.test(code ?? "")) return null; // 仅 A 股指数/证券代码
+  const symbol = `${mkt === "1" ? "sh" : "sz"}${code}`;
+  try {
+    const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${symbol}&scale=240&ma=no&datalen=${datalen}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Referer: "https://finance.sina.com.cn" },
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const rows = JSON.parse(await res.text()) as { day: string; open: string; high: string; low: string; close: string; volume: string }[];
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const out: KlineCandle[] = [];
+    for (const r of rows) {
+      const open = Number(r.open);
+      const close = Number(r.close);
+      const high = Number(r.high);
+      const low = Number(r.low);
+      const volGu = Number(r.volume);
+      if (!r.day || !Number.isFinite(close) || close <= 0) continue;
+      out.push({
+        date: r.day,
+        open,
+        close,
+        high,
+        low,
+        // 股 → 手（÷100），与东财 f56 同单位；活跃筹码市值指数的定标依赖该单位一致性
+        ...(Number.isFinite(volGu) && volGu > 0 ? { volume: volGu / 100 } : {}),
+      });
+    }
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
 }

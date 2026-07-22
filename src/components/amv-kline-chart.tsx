@@ -63,22 +63,33 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
     // 主图＝活跃筹码市值指数（点数，已定标）；副图＝成交额（亿元）
     const candles = data.map((d) => [d.open, d.close, d.low, d.high].map((v) => Number(v.toFixed(1))));
     const closes = data.map((d) => d.close);
+    // 成交额缺失（如东财被封走新浪备源，新浪日K无额字段）→ 收起副图，主图占满，不画全零柱误导
+    const hasAmount = data.some((d) => d.amount > 0);
     const vols = data.map((d) => ({
       value: d.amount / 1e8,
       itemStyle: { color: d.close >= d.open ? RED : GREEN, opacity: 0.65 },
     }));
 
+    const mainXAxis = {
+      type: "category" as const,
+      gridIndex: 0,
+      data: dates,
+      boundaryGap: true,
+      axisLine: { lineStyle: { color: "rgba(113,113,122,0.2)" } },
+    };
     chart.setOption(
       {
         animationDuration: 300,
-        // 主图 + 成交额副图两个 grid，共享 x 轴缩放。
+        // 主图（+ 有成交额时的副图）grid，共享 x 轴缩放。
         // ⚠️ 不能用 containLabel：两 grid 会按各自 y 轴标签宽度收缩，主副图绘图区错位（柱不在蜡烛正下方、
         // 十字线不共线）——固定相同 left 保证两 plot 区完全重合（标签用紧凑格式控制在 left 宽度内）
-        grid: [
-          { left: 66, right: 8, top: 28, height: "56%" },
-          { left: 66, right: 8, top: "74%", height: "14%" },
-        ],
-        axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+        grid: hasAmount
+          ? [
+              { left: 66, right: 8, top: 28, height: "56%" },
+              { left: 66, right: 8, top: "74%", height: "14%" },
+            ]
+          : [{ left: 66, right: 8, top: 28, height: "74%" }],
+        ...(hasAmount ? { axisPointer: { link: [{ xAxisIndex: [0, 1] }] } } : {}),
         tooltip: {
           trigger: "axis",
           axisPointer: { type: "cross" },
@@ -93,7 +104,8 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
               `${d.date}<br/>` +
               `开 ${fmtPts(d.open)}　收 ${fmtPts(d.close)}<br/>` +
               `高 ${fmtPts(d.high)}　低 ${fmtPts(d.low)}<br/>` +
-              `涨跌 <span style="color:${pctColor}">${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%</span>　额 ${fmtYi(d.amount / 1e8)}`
+              `涨跌 <span style="color:${pctColor}">${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%</span>` +
+              (d.amount > 0 ? `　额 ${fmtYi(d.amount / 1e8)}` : "")
             );
           },
         },
@@ -104,25 +116,19 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
           itemWidth: 14,
           itemHeight: 8,
         },
-        xAxis: [
-          {
-            type: "category",
-            gridIndex: 0,
-            data: dates,
-            boundaryGap: true,
-            axisLine: { lineStyle: { color: "rgba(113,113,122,0.2)" } },
-            axisLabel: { show: false },
-            axisTick: { show: false },
-          },
-          {
-            type: "category",
-            gridIndex: 1,
-            data: dates,
-            boundaryGap: true,
-            axisLine: { lineStyle: { color: "rgba(113,113,122,0.2)" } },
-            axisLabel: { color: AXIS, hideOverlap: true },
-          },
-        ],
+        xAxis: hasAmount
+          ? [
+              { ...mainXAxis, axisLabel: { show: false }, axisTick: { show: false } },
+              {
+                type: "category",
+                gridIndex: 1,
+                data: dates,
+                boundaryGap: true,
+                axisLine: { lineStyle: { color: "rgba(113,113,122,0.2)" } },
+                axisLabel: { color: AXIS, hideOverlap: true },
+              },
+            ]
+          : [{ ...mainXAxis, axisLabel: { color: AXIS, hideOverlap: true } }],
         yAxis: [
           {
             type: "value",
@@ -132,18 +138,22 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
             // 紧凑格式：指数点数 ≥1万 显示 xx.x万，标签须放进固定 left=66 内，两 grid 才能对齐
             axisLabel: { color: AXIS, formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万` : `${Math.round(v)}`) },
           },
-          {
-            type: "value",
-            gridIndex: 1,
-            // 成交额柱必须 0 基线（不设 scale）：非 0 起点会让放量/缩量的目视比例失真、小量日缩到不可见
-            splitNumber: 2,
-            splitLine: { show: false },
-            axisLabel: { color: AXIS, formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万亿` : `${Math.round(v)}亿`) },
-          },
+          ...(hasAmount
+            ? [
+                {
+                  type: "value" as const,
+                  gridIndex: 1,
+                  // 成交额柱必须 0 基线（不设 scale）：非 0 起点会让放量/缩量的目视比例失真、小量日缩到不可见
+                  splitNumber: 2,
+                  splitLine: { show: false },
+                  axisLabel: { color: AXIS, formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万亿` : `${Math.round(v)}亿`) },
+                },
+              ]
+            : []),
         ],
         dataZoom: [
-          { type: "inside", xAxisIndex: [0, 1], start: 0, end: 100 },
-          { type: "slider", xAxisIndex: [0, 1], start: 0, end: 100, height: 16, bottom: 6 },
+          { type: "inside", xAxisIndex: hasAmount ? [0, 1] : [0], start: 0, end: 100 },
+          { type: "slider", xAxisIndex: hasAmount ? [0, 1] : [0], start: 0, end: 100, height: 16, bottom: 6 },
         ],
         series: [
           {
@@ -164,13 +174,17 @@ export function AmvKlineChart({ data, className = "h-[340px] w-full sm:h-[400px]
             smooth: true,
             lineStyle: { width: 1, color: MA_COLORS[i] },
           })),
-          {
-            name: "成交额",
-            type: "bar",
-            xAxisIndex: 1,
-            yAxisIndex: 1,
-            data: vols,
-          },
+          ...(hasAmount
+            ? [
+                {
+                  name: "成交额",
+                  type: "bar" as const,
+                  xAxisIndex: 1,
+                  yAxisIndex: 1,
+                  data: vols,
+                },
+              ]
+            : []),
         ],
       },
       true,

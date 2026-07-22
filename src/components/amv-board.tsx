@@ -113,7 +113,7 @@ export function AmvBoard() {
               <Stat label="近5日" value={fmtPct(d.analysis.trend5Pct)} valueClass={changeColor(d.analysis.trend5Pct)} />
               <Stat label="近20日" value={fmtPct(d.analysis.amv20Pct)} valueClass={changeColor(d.analysis.amv20Pct)} />
               <Stat label="沪指20日" value={fmtPct(d.analysis.index20Pct)} valueClass={changeColor(d.analysis.index20Pct)} />
-              <Stat label="10日额" value={formatAmountCN(d.turnover10)} />
+              {d.turnover10 > 0 && <Stat label="10日额" value={formatAmountCN(d.turnover10)} />}
               {d.todayAmount != null && <Stat label="今日额" value={formatAmountCN(d.todayAmount)} />}
               {d.breadth && (
                 <>
@@ -148,7 +148,8 @@ export function AmvBoard() {
                 <AmvKlineChart data={candles} />
                 <p className="px-2 pt-1 text-[11px] text-zinc-400">
                   蜡烛＝活跃筹码市值指数：近10日两市成交量（活跃筹码代理）×沪指当日
-                  开/高/低/收，定标为指数点数（非金额）· 副图为两市成交额
+                  开/高/低/收，定标为指数点数（非金额）
+                  {candles.some((c) => c.amount > 0) ? " · 副图为两市成交额" : " · 备源数据无成交额，副图暂略"}
                 </p>
               </>
             ) : (
@@ -161,7 +162,7 @@ export function AmvBoard() {
           </section>
 
           <p className="px-4 pt-3 text-center text-[11px] text-zinc-400">
-            数据来自东方财富两市成交额估算，交易时段每 30 秒刷新 · 仅供参考
+            数据来自东方财富/新浪公开行情（量价合成估算），交易时段每 30 秒刷新 · 仅供参考
           </p>
         </>
       )}

@@ -36,5 +36,18 @@ export async function GET(request: Request) {
       }
     }),
   );
-  return NextResponse.json({ at: new Date().toISOString(), results });
+  // 新浪备源连通性
+  const t0 = Date.now();
+  let sina: Record<string, unknown>;
+  try {
+    const res = await fetch(
+      "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=sh000001&scale=240&ma=no&datalen=3",
+      { headers: { "User-Agent": HEADERS["User-Agent"], Referer: "https://finance.sina.com.cn" }, cache: "no-store", signal: AbortSignal.timeout(5000) },
+    );
+    const rows = JSON.parse(await res.text()) as { day: string; close: string }[];
+    sina = { status: res.status, ms: Date.now() - t0, rows: rows.length, last: rows[rows.length - 1] ?? null };
+  } catch (e) {
+    sina = { status: 0, ms: Date.now() - t0, error: String(e).slice(0, 120) };
+  }
+  return NextResponse.json({ at: new Date().toISOString(), results, sina });
 }
