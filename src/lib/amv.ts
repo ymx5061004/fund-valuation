@@ -5,7 +5,7 @@
 // 与 prediction.ts / meihua.ts 一样是独立引擎：纯函数、look-ahead 安全（只用已收盘数据），
 // 不并入 predict() 打分。仅为大盘趋势参考，不构成投资建议。
 
-import type { AmvAnalysis, AmvPoint, KlineCandle, Signal } from "@/lib/types";
+import type { AmvAnalysis, AmvCandle, AmvPoint, KlineCandle, Signal } from "@/lib/types";
 
 /** 板块详情返回给客户端的日线上限（≈3 年交易日）：够月视图(36)/周视图(150)/日视图(slice 160)，又不至传全量 */
 export const AMV_BOARD_HISTORY = 750;
@@ -72,7 +72,9 @@ export function computeAmvSeries(candles: KlineCandle[], window = AMV_WINDOW): A
   for (let i = 0; i < usable.length; i++) {
     sum += usable[i].amount as number;
     if (i >= window) sum -= usable[i - window].amount as number;
-    if (i >= window - 1) points.push({ date: usable[i].date, amv: sum, close: usable[i].close });
+    if (i >= window - 1) {
+      points.push({ date: usable[i].date, amv: sum, close: usable[i].close, amount: usable[i].amount as number });
+    }
   }
   return points;
 }
@@ -185,21 +187,74 @@ export function amvChange(points: AmvPoint[]): { value: number; change: number; 
   return { value: last.amv, change, changePct: prev.amv > 0 ? (change / prev.amv) * 100 : 0, date: last.date };
 }
 
+/** 周/月分组键：月=YYYY-MM；周=年内周号（resampleAmv 与 buildAmvCandles 共用，口径必须一致） */
+function periodKey(d: string, period: "week" | "month"): string {
+  if (period === "month") return d.slice(0, 7); // YYYY-MM
+  const [y, m, day] = d.split("-").map(Number);
+  const dt = new Date(y, m - 1, day);
+  const jan1 = new Date(y, 0, 1);
+  const week = Math.ceil(((dt.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7);
+  return `${y}-W${week}`;
+}
+
 /** 把日线活跃市值序列重采样为周/月线（取每组最后一个交易日的值作为该周期收盘）。
- *  日频估算无 OHLC，周/月视图同为折线；仅降低频率、不改口径。 */
+ *  仅降低频率、不改口径（单指数面板的对比折线用）。 */
 export function resampleAmv(points: AmvPoint[], period: "week" | "month"): AmvPoint[] {
-  const keyOf = (d: string): string => {
-    if (period === "month") return d.slice(0, 7); // YYYY-MM
-    const [y, m, day] = d.split("-").map(Number);
-    const dt = new Date(y, m - 1, day);
-    const jan1 = new Date(y, 0, 1);
-    const week = Math.ceil(((dt.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7);
-    return `${y}-W${week}`;
-  };
   const out: AmvPoint[] = [];
   for (let i = 0; i < points.length; i++) {
-    const nextKey = i + 1 < points.length ? keyOf(points[i + 1].date) : null;
-    if (keyOf(points[i].date) !== nextKey) out.push(points[i]); // 组内最后一根 = 周期收盘
+    const nextKey = i + 1 < points.length ? periodKey(points[i + 1].date, period) : null;
+    if (periodKey(points[i].date, period) !== nextKey) out.push(points[i]); // 组内最后一根 = 周期收盘
+  }
+  return out;
+}
+
+/** 日线活跃市值 → 蜡烛序列（估算口径，与指南针盘中逐笔蜡烛不同，UI 需注明）：
+ *  - 日K：开=前日值 收=当日值（每天只有一个收盘级数值，无盘中高低 → 无影线），首日无前值跳过
+ *  - 周/月K：日值聚合——开=组内首日 收=组内末日 高/低=组内极值（真实影线）；成交额=组内合计 */
+export function buildAmvCandles(points: AmvPoint[], period: "day" | "week" | "month"): AmvCandle[] {
+  if (period === "day") {
+    const out: AmvCandle[] = [];
+    for (let i = 1; i < points.length; i++) {
+      const open = points[i - 1].amv;
+      const close = points[i].amv;
+      out.push({
+        date: points[i].date,
+        open,
+        close,
+        high: Math.max(open, close),
+        low: Math.min(open, close),
+        amount: points[i].amount,
+      });
+    }
+    return out;
+  }
+  const out: AmvCandle[] = [];
+  let group: AmvPoint[] = [];
+  // 输入通常是按固定根数截尾的日线（AMV_BOARD_HISTORY），首组大概率从周期中间开始——
+  // 其 开/高/低 只覆盖残段、数值失真，一律丢弃首组（与 dropUnfinishedToday 同哲学：宁少一根，不给失真值）
+  let firstGroup = true;
+  const flush = () => {
+    if (group.length === 0) return;
+    if (firstGroup) {
+      firstGroup = false;
+      group = [];
+      return;
+    }
+    const amvs = group.map((p) => p.amv);
+    out.push({
+      date: group[group.length - 1].date,
+      open: group[0].amv,
+      close: group[group.length - 1].amv,
+      high: Math.max(...amvs),
+      low: Math.min(...amvs),
+      amount: group.reduce((s, p) => s + p.amount, 0),
+    });
+    group = [];
+  };
+  for (let i = 0; i < points.length; i++) {
+    group.push(points[i]);
+    const nextKey = i + 1 < points.length ? periodKey(points[i + 1].date, period) : null;
+    if (periodKey(points[i].date, period) !== nextKey) flush();
   }
   return out;
 }

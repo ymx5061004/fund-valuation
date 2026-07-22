@@ -47,6 +47,21 @@ export interface AmvPoint {
   amv: number;
   /** 当日收盘点位（与指数走势对比用） */
   close: number;
+  /** 当日成交额（元，两市或单指数口径同序列），蜡烛图成交量副图用 */
+  amount: number;
+}
+
+/** 活跃市值蜡烛（lib/amv.ts buildAmvCandles）。
+ *  周/月K=日值聚合（开=首日 收=末日 高低=期内极值，真实影线）；
+ *  日K=相邻两日推算（开=前日值 收=当日值，无盘中数据故无影线）——估算口径，与指南针盘中逐笔蜡烛不同 */
+export interface AmvCandle {
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  /** 期内成交额合计（元），成交量副图用 */
+  amount: number;
 }
 
 /** 两市涨跌家数（活跃市值板块的市场宽度） */

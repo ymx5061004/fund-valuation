@@ -2,12 +2,12 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AmvBoard as AmvBoardData, AmvPoint } from "@/lib/types";
-import { AMV_WINDOW, formatAmountCN, resampleAmv } from "@/lib/amv";
+import type { AmvBoard as AmvBoardData, AmvCandle } from "@/lib/types";
+import { buildAmvCandles, formatAmountCN } from "@/lib/amv";
 import { isAShareTradingTime, usePolling } from "@/lib/use-polling";
 import { changeColor, cn } from "@/lib/utils";
 import { SignalBadge } from "@/components/ui/badge";
-import { AmvTrendChart } from "@/components/amv-trend-chart";
+import { AmvKlineChart } from "@/components/amv-kline-chart";
 import { AmvVerdict } from "@/components/amv-verdict";
 
 const TABS = [
@@ -68,13 +68,13 @@ export function AmvBoard() {
     { activeMs: 30000, idleMs: 300000, isActive: pollActive, key: "amv" },
   );
 
-  // 选中频率的走势点：日线取近 160 交易日，周/月重采样后取尾段。
-  // useMemo 依赖 [d, tab]：轮询拿到同值时图表由 AmvTrendChart 的签名门控跳过重绘（不复位缩放）
-  const chartPoints: AmvPoint[] = useMemo(() => {
+  // 选中频率的蜡烛：日K取近 160 根（开=前日值），周/月K为日值聚合（真实高低）。
+  // useMemo 依赖 [d, tab]：轮询拿到同值时图表由 AmvKlineChart 的签名门控跳过重绘（不复位缩放）
+  const candles: AmvCandle[] = useMemo(() => {
     if (!d) return [];
-    if (tab === "日") return d.points.slice(-160);
-    if (tab === "周") return resampleAmv(d.points, "week").slice(-120);
-    return resampleAmv(d.points, "month");
+    if (tab === "日") return buildAmvCandles(d.points.slice(-161), "day");
+    if (tab === "周") return buildAmvCandles(d.points, "week").slice(-120);
+    return buildAmvCandles(d.points, "month");
   }, [d, tab]);
 
   return (
@@ -142,10 +142,18 @@ export function AmvBoard() {
           </div>
 
           <section className="px-2 py-3">
-            {chartPoints.length > 0 ? (
-              <AmvTrendChart points={chartPoints} indexLabel="沪指点位" />
+            {candles.length > 0 ? (
+              <>
+                <AmvKlineChart data={candles} />
+                <p className="px-2 pt-1 text-[11px] text-zinc-400">
+                  {tab === "日"
+                    ? "日K为估算蜡烛：开=前日值、收=当日值（每日仅一个收盘级数值，无盘中高低）"
+                    : `${tab}K 由日值聚合：开=首日、收=末日、高低=期内极值`}
+                  　· 副图为两市成交额
+                </p>
+              </>
             ) : (
-              <div className="flex h-[260px] items-center justify-center text-sm text-zinc-400">暂无走势数据</div>
+              <div className="flex h-[340px] items-center justify-center text-sm text-zinc-400">暂无走势数据</div>
             )}
           </section>
 
