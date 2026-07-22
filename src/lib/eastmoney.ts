@@ -657,9 +657,10 @@ export async function buildAmvBoard(): Promise<AmvBoard | null> {
     fetchKline("0.399001", 101, 1200, beg),
     fetchMarketBreadth(),
   ]);
-  // 板级旧值兜底（10min）：偶发上游失败时冷实例不至于 503，也防「两市↔仅沪市」在轮询间跳变
+  // 板级旧值兜底（失败路径 24h：板块是日频数据，长时间封禁/限流期间温实例供昨日板远好于 503；
+  // tradingNow/todayAmount 会随旧板停在缓存时刻，属可接受降级）
   // （同估值回退「主源旧值优先于备源」的既有哲学：近期完整两市值 优先于 新鲜的半市值）
-  if (sh.length === 0) return recall<AmvBoard>("amv:board", STALE_LIVE_MS); // 沪指都拿不到则整体失败→旧板兜底
+  if (sh.length === 0) return recall<AmvBoard>("amv:board", STALE_HISTORY_MS); // 沪指都拿不到则整体失败→旧板兜底
   // 深市整体抓取失败（sz=[]）时退化为仅沪市：值会偏低，用 coverage 标注让 UI 诚实提示，不静默冒充「两市」
   const coverage: "both" | "sh-only" = sz.length > 0 ? "both" : "sh-only";
   const szByDate = new Map(sz.map((c) => [c.date, c]));
@@ -678,7 +679,7 @@ export async function buildAmvBoard(): Promise<AmvBoard | null> {
   const points = idx.points.slice(-AMV_BOARD_HISTORY);
   const analysis = analyzeAmv(points);
   const chg = amvChange(points);
-  if (!analysis || !chg) return recall<AmvBoard>("amv:board", STALE_LIVE_MS);
+  if (!analysis || !chg) return recall<AmvBoard>("amv:board", STALE_HISTORY_MS); // 样本不足同属失败路径→24h 旧板
   // 「活跃资金」金额口径副指标：近10日两市成交额合计
   const turnover10 = dropped.slice(-10).reduce((s, c) => s + (c.amount ?? 0), 0);
   const board: AmvBoard = {
