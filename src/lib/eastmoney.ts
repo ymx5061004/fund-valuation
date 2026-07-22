@@ -649,7 +649,9 @@ export async function buildAmvBoard(): Promise<AmvBoard | null> {
     fetchKline("0.399001", 101, 1200, beg),
     fetchMarketBreadth(),
   ]);
-  if (sh.length === 0) return null; // 沪指历史都拿不到则整体失败
+  // 板级旧值兜底（10min）：偶发上游失败时冷实例不至于 503，也防「两市↔仅沪市」在轮询间跳变
+  // （同估值回退「主源旧值优先于备源」的既有哲学：近期完整两市值 优先于 新鲜的半市值）
+  if (sh.length === 0) return recall<AmvBoard>("amv:board", STALE_LIVE_MS); // 沪指都拿不到则整体失败→旧板兜底
   // 深市整体抓取失败（sz=[]）时退化为仅沪市：值会偏低，用 coverage 标注让 UI 诚实提示，不静默冒充「两市」
   const coverage: "both" | "sh-only" = sz.length > 0 ? "both" : "sh-only";
   const szAmount = new Map(sz.map((c) => [c.date, c.amount ?? 0]));
@@ -662,8 +664,8 @@ export async function buildAmvBoard(): Promise<AmvBoard | null> {
   const points = computeAmvSeries(dropped).slice(-AMV_BOARD_HISTORY);
   const analysis = analyzeAmv(points);
   const chg = amvChange(points);
-  if (!analysis || !chg) return null;
-  return {
+  if (!analysis || !chg) return recall<AmvBoard>("amv:board", STALE_LIVE_MS);
+  const board: AmvBoard = {
     value: chg.value,
     change: chg.change,
     changePct: chg.changePct,
@@ -675,6 +677,9 @@ export async function buildAmvBoard(): Promise<AmvBoard | null> {
     points,
     breadth,
   };
+  // 只记忆完整两市板；仅沪市的降级板优先让位给近期完整板（防值腰斩跳变），实在没有再如实降级展示
+  if (coverage === "sh-only") return recall<AmvBoard>("amv:board", STALE_LIVE_MS) ?? board;
+  return remember("amv:board", board);
 }
 
 // ---- 指数成分股（按市场涨跌幅榜，覆盖主要 A 股指数）----
