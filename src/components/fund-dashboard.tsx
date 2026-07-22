@@ -58,6 +58,8 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
 
   // 用户搜索添加的基金：持久化代码，挂载后按需拉取完整数据
   const [addedCodes, setAddedCodes] = useLocalStorage<string[]>("fv.added", []);
+  // 梅花易数卦象开关（/me 设置，默认关闭；首帧 false 不渲染，挂载读到 true 后再出现，无 hydration 问题）
+  const [meihuaOn] = useLocalStorage<boolean>("fv.meihua", false);
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
@@ -430,8 +432,8 @@ export function FundDashboard({ funds: initialFunds, source }: { funds: Fund[]; 
         <div className="space-y-4">
           <PredictionPanel prediction={selectedPrediction} />
           <BacktestPanel result={backtestResult} />
-          {/* 梅花易数卦象（纯娱乐，独立于技术指标，勿并入 predict 打分） */}
-          <MeihuaPanel code={selected.code} />
+          {/* 梅花易数卦象（纯娱乐，独立于技术指标，勿并入 predict 打分；开关在 /me，默认关闭） */}
+          {meihuaOn && <MeihuaPanel code={selected.code} />}
           <HoldingsCalculator
             fund={selected}
             shares={holdings[selected.code] ?? 0}

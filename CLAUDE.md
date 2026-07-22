@@ -108,7 +108,8 @@ src/
    ├─ nav-chart.tsx         ECharts 净值图（'use client'，ResizeObserver 自适应）
    ├─ prediction-panel.tsx / backtest-panel.tsx  涨跌预测 / 回测面板（含免责声明）
    ├─ amv-board.tsx / amv-strip.tsx  活跃市值 0AMV 独立板块页（/amv，值+日周月+涨跌家数+研判）/ 入口卡（/market，客户端 fetch /api/amv 轮询，点进 /amv）
-   ├─ amv-panel.tsx / amv-trend-chart.tsx / amv-verdict.tsx  单指数 0AMV 面板（指数详情页）/ 共用双轴图 / 共用研判依据+口诀+免责
+   ├─ amv-kline-chart.tsx    0AMV 蜡烛图（板块用：主图K线+MA+两市成交额副图；两 grid 固定 left 对齐、副图 0 基线）
+   ├─ amv-panel.tsx / amv-trend-chart.tsx / amv-verdict.tsx  单指数 0AMV 面板（指数详情页）/ 双轴折线（面板对比图）/ 共用研判依据+口诀+免责
    ├─ meihua-panel.tsx      周易卦象娱乐面板（本卦/变卦/互卦/体用生克；挂载后起卦防 hydration 不一致；「仅供娱乐」标识勿删）
    ├─ holdings-calculator.tsx 持仓收益估算
    └─ ui/{card,badge}.tsx   基础组件 + SignalBadge
@@ -120,7 +121,7 @@ src/
 **要换 LLM 研判或 ML 模型，只改 `predict` 内部实现、保持签名不变**，页面/组件无需改动。
 ⚠️ 任何预测**不构成投资建议**，UI 已内置「仅供参考、市场有风险」提示——改动时务必保留。
 
-另有 `meihua.ts` + `MeihuaPanel`（梅花易数卦象，/market 与 /fund/[code] 均已接入）：**纯娱乐定位**（用户明确要求独立面板），数字起卦对同一基金同一预测日确定可复现。它与 predict() 完全隔离——**不得并入综合打分或任何技术信号权重**，面板的「仅供娱乐」徽章与免责文案不可移除。
+另有 `meihua.ts` + `MeihuaPanel`（梅花易数卦象，/market 与 /fund/[code] 均已接入）：**纯娱乐定位**（用户明确要求独立面板），数字起卦对同一基金同一预测日确定可复现。它与 predict() 完全隔离——**不得并入综合打分或任何技术信号权重**，面板的「仅供娱乐」徽章与免责文案不可移除。**显隐由 /me「功能」开关控制（`fv.meihua`，用户要求默认关闭）**，两接入点按开关渲染；开关是偏好（同 fv.theme），不进备份导出。
 
 ### 活跃市值 0AMV（lib/amv.ts + AmvPanel/AmvStrip，大盘指标）
 
@@ -128,10 +129,10 @@ src/
 - **实现口径**：拿不到全市场逐股浮动筹码数据，用**指数近 10 日成交额滚动合计**作活跃资金代理（死筹不产生成交额）。数据来自东财日 K `f57` 成交额（`fetchKline` fields2 已含 f57，`KlineCandle.amount` 可选——个别海外指数缺失）。
 - 纯函数、look-ahead 安全：`computeAmvSeries`（滚动合计）+ `analyzeAmv`（近5日趋势 / 近20日指数-AMV 同步象限 / 近30vs前30日极值背离）。**盘中要先 `dropUnfinishedToday(candles, secid)` 剔除未收盘当日 K 线**（当日成交额不完整会让末点失真下坠）——按 secid 所属市场收盘时间判定（A 股 15:00 / 港股 16:00 / 日经北京 14:00；未识别市场交易日内一律剔除当日），**必须传 secid**（早期只处理 A 股，港股/日经盘中会误报信号）。东财 kline 在 `beg=0` 时**忽略 lmt 返回 1990 至今全量(~8600 点 ≈880KB)**，面板算 AMV 前 `slice(-160)` 截尾（否则默认视图跨 36 年、近期趋势被压平）；且**全量包在 emFetch 3s 超时内经常传不完**——线上深市 kline 因此从未成功过（实测 prod `candle:[]`、板块长期 sh-only/冷启动 503），所以 `buildAmvBoard` 必须给 `fetchKline` 传**有界 beg**（今天−1250 自然日，YYYYMMDD，只回几十 KB），beg 也参与旧值兜底 cacheKey 防止有界/全量互相污染。/api/kline 的日/周/月 K 图沿用全量 beg=0（历史行为，勿动）。
 - 接入点：
-  - **独立板块 `/amv`（AmvBoard，主入口，参考指南针 0AMV 板块）**：值+日涨跌 / 日周月走势 / 今日实时两市成交额 / 涨跌家数 / 研判。数据 `buildAmvBoard()`（eastmoney.ts，**两市＝沪指+深成指成交额合计**作活跃资金、沪指做参考指数与剔除口径；深市 K 线整体抓不到时退化为仅沪市并置 `coverage:"sh-only"`，UI 注明「仅沪市（深市暂缺）」不静默冒充两市；另有**板级 10min 旧值兜底**——整板失败回旧板、仅沪市降级板让位给近期完整两市板，防冷实例 503 与「两市↔仅沪市」轮询跳变）→ `/api/amv`(revalidate 15) → 客户端交易时段 30s 轮询。入口＝`/market` 顶部 `AmvStrip` **客户端**入口卡（fetch `/api/amv` + 60s 轮询、与板块同口径 buildAmvBoard，点进 `/amv`；数据未就绪/失败整条隐藏）。`AmvTrendChart` 按数据签名门控 setOption，轮询同值不重绘（保留用户缩放）；`indexLabel` prop 让单指数面板不误标「沪指点位」。
+  - **独立板块 `/amv`（AmvBoard，主入口，参考指南针 0AMV 板块）**：值+日涨跌 / 日周月走势 / 今日实时两市成交额 / 涨跌家数 / 研判。数据 `buildAmvBoard()`（eastmoney.ts，**两市＝沪指+深成指成交额合计**作活跃资金、沪指做参考指数与剔除口径；深市 K 线整体抓不到时退化为仅沪市并置 `coverage:"sh-only"`，UI 注明「仅沪市（深市暂缺）」不静默冒充两市；另有**板级 10min 旧值兜底**——整板失败回旧板、仅沪市降级板让位给近期完整两市板，防冷实例 503 与「两市↔仅沪市」轮询跳变）→ `/api/amv`(revalidate 15) → 客户端交易时段 30s 轮询。入口＝`/market` 顶部 `AmvStrip` **客户端**入口卡（fetch `/api/amv` + 60s 轮询、与板块同口径 buildAmvBoard，点进 `/amv`；数据未就绪/失败整条隐藏）。图表组件均按**数据签名门控 setOption**，轮询同值不重绘（保留用户缩放）；`AmvTrendChart` 的 `indexLabel` prop 让单指数面板不误标「沪指点位」。
   - 指数详情 `/index/[secid]` 的 `AmvPanel`：单个指数视角的活跃市值（自取该指数日 K），与大盘板块并存。
-- **数据保真度（用户已明确 2026-07-21）**：指南针的 0AMV 是专有合成指数（逐股实时活跃度、有自己 OHLC 蜡烛），公开接口拿不到其原始序列/公式。本项目是**公开成交额估算版**（每天单值→折线，非蜡烛；分时/五日不做），**数值不等同指南针**——`AmvVerdict estimateNote` 已注明，勿去掉该说明。
-- 共用组件：`AmvTrendChart`(双轴折线，日/周/月共用)、`AmvVerdict`(依据+口诀+免责)。`resampleAmv` 把日线重采样为周/月线。
+- **数据保真度（用户已明确 2026-07-21）**：指南针的 0AMV 是专有合成指数（逐股实时活跃度、有自己盘中逐笔 OHLC），公开接口拿不到其原始序列/公式。本项目是**公开成交额估算版**，**数值不等同指南针**——`AmvVerdict estimateNote` 已注明，勿去掉该说明。板块图表为**估算蜡烛**（用户 2026-07-22 要求 K 线而非折线）：日K 开=前日值/收=当日值（每日仅一个收盘级数值，无盘中高低→无影线）；周/月K=日值聚合（开首收末、高低=期内极值，真实影线），**首组一律丢弃**（750 点截尾多落在周期中间，残缺组的开/高/低失真）；分时/五日仍不做（无盘中序列）。图下注释说明蜡烛口径，勿删。
+- 共用组件：`AmvKlineChart`(板块蜡烛图：主图K线+MA5/10/20+两市成交额副图，红涨绿跌)、`AmvTrendChart`(双轴折线，单指数面板对比图用)、`AmvVerdict`(依据+口诀+免责)。`buildAmvCandles` 日线→日/周/月蜡烛、`resampleAmv` 日线→周/月折线点（共用 `periodKey` 分组口径）。
 - 与 predict()/meihua 相互独立，不并入基金打分；免责声明（「勿单独作为买卖依据/不构成投资建议」）不可删。仅反映短线活跃资金，长线锁筹品种参考意义有限。
 
 ## 应用结构与功能现状（底部 Tab 布局，养基宝风格）
@@ -149,7 +150,7 @@ src/
   **盘中估值 = 天天基金原始估值(gsz 估值净值 + gszzl 估值涨幅)**（23d0cd0 用户明确，是预估值、与当日确认涨幅区分），始终显示（`estimateFresh`=有估值数据；仅无估值数据时显示「--」）。
 - **/fund/[code]（基金详情）** = `FundDetail`（全屏，`/fund/` 下隐藏底部 TabBar，有自己的底部操作栏）。取 `/api/fund`(净值历史) + `/api/quotes`(指标)。头部：名称 + 当日涨幅(带「估」) + 最新净值 + 近一年；区间收益(本周/本月/今年/近一年)；净值走势图(NavChart `zoomStart=0`)+周期(近1月/3月/6月/1年)；净值历史表(日期/净值/日涨幅)；底部「加/删自选」+「添加持有」(ImportSheet 的 `presetFund` 预选本基金)。
 - **/news（资讯）** = `NewsView`。要闻（`np-listapi` column=350，分页「加载更多」）+ 7×24 快讯（`np-weblist` getFastNewsList，sortEnd 翻页、60s 自动刷新、titleColor>0 标红）双 Tab；数据层在 `lib/news.ts`，走 `/api/news` 代理；点击外链新窗口打开东财原文。
-- **/me（我的）** = `MeView` 设置页。外观三态切换（跟随系统/浅色/深色，存 `fv.theme`，暗色为 `.dark` class 驱动 + layout 防闪烁内联脚本，**别改回 media 查询方案**）；本地数据管理（4 个 fv.* 的条数展示/分项清除/JSON 备份导出导入）；关于与免责声明。
+- **/me（我的）** = `MeView` 设置页。外观三态切换（跟随系统/浅色/深色，存 `fv.theme`，暗色为 `.dark` class 驱动 + layout 防闪烁内联脚本，**别改回 media 查询方案**）；功能开关（梅花易数卦象 `fv.meihua`，默认关闭）；本地数据管理（4 个 fv.* 的条数展示/分项清除/JSON 备份导出导入）；关于与免责声明。
 - **/member** = 占位页（`ComingSoon`）。会员体系需自建后端，公开接口帮不上，暂不做。
 
 > ⚠️ **涨跌预测 + 历史回测是「保留功能」，后续还要用**（现位于 /market 行情页与 /fund/[code] 详情页）。重构或调整布局时**切勿删除** `prediction.ts` / `backtest.ts` / `PredictionPanel` / `BacktestPanel`，也不要把它们从 /market 里移除。

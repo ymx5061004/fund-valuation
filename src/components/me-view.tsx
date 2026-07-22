@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useTheme, type ThemePref } from "@/lib/theme";
+import { useLocalStorage } from "@/lib/use-local-storage";
 import { cn } from "@/lib/utils";
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
@@ -34,6 +35,8 @@ function readCount(key: string): number {
 
 export function MeView() {
   const [pref, setPref] = useTheme();
+  // 梅花易数卦象开关（纯娱乐功能，默认关闭；行情页/基金详情页按此显隐）
+  const [meihuaOn, setMeihuaOn, meihuaLoaded] = useLocalStorage<boolean>("fv.meihua", false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [importMsg, setImportMsg] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -121,6 +124,40 @@ export function MeView() {
                 {o.label}
               </button>
             ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>功能</CardTitle>
+          <CardDescription>可选功能的显示开关</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm text-zinc-800 dark:text-zinc-100">梅花易数卦象</div>
+              <div className="text-xs text-zinc-400">在行情页与基金详情页显示每日卦象面板 · 仅供娱乐，不构成投资建议</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={meihuaOn}
+              aria-label="梅花易数卦象开关"
+              disabled={!meihuaLoaded}
+              onClick={() => setMeihuaOn((v) => !v)}
+              className={cn(
+                "relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50",
+                meihuaOn ? "bg-blue-600" : "bg-zinc-300 dark:bg-zinc-600",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform",
+                  meihuaOn && "translate-x-5",
+                )}
+              />
+            </button>
           </div>
         </CardContent>
       </Card>
