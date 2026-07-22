@@ -569,10 +569,10 @@ export async function fetchIndexDetail(secid: string): Promise<IndexDetail | nul
 
 // ---- K 线（日/周/月）----
 
-async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: number): Promise<KlineCandle[] | null> {
+async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: number, beg: number | string): Promise<KlineCandle[] | null> {
   try {
     // fields2: f51 日期 f52 开 f53 收 f54 高 f55 低 f57 成交额（活跃市值 0AMV 计算用）
-    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=0&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55,f57`;
+    const url = `https://${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&beg=${beg}&end=20500101&lmt=${lmt}&fields1=f1&fields2=f51,f52,f53,f54,f55,f57`;
     const res = await emFetch(url, { headers: { ...HEADERS, Referer: "https://quote.eastmoney.com/" }, next: { revalidate: 300 } }, 3000);
     if (!res.ok) return null;
     const json = JSON.parse(await res.text()) as { data?: { klines?: string[] } };
@@ -597,12 +597,14 @@ async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: num
 }
 
 /** K 线：klt 101日/102周/103月。两个 host 都失败时用进程内 24h 旧值兜底
- *  （日频数据、旧值可接受；防东财瞬时限流/网络抖动让 K 线图与活跃市值板块整片空白）。 */
-export async function fetchKline(secid: string, klt: number, lmt = 120): Promise<KlineCandle[]> {
-  const cacheKey = `kline:${secid}:${klt}`;
+ *  （日频数据、旧值可接受；防东财瞬时限流/网络抖动让 K 线图与活跃市值板块整片空白）。
+ *  beg：起始日 YYYYMMDD。默认 0＝全量（K 线图沿用，~880KB）；**大体量场景务必传有界日期**——
+ *  全量包在 3s 超时内经常传不完（实测线上深市 kline 因此从未成功过），有界区间只有几十 KB。 */
+export async function fetchKline(secid: string, klt: number, lmt = 120, beg: number | string = 0): Promise<KlineCandle[]> {
+  const cacheKey = `kline:${secid}:${klt}:${beg}`; // beg 参与 key：有界与全量是不同数据集，旧值兜底不能互相污染
   const candles =
-    (await fetchKlineFrom("push2his.eastmoney.com", secid, klt, lmt)) ??
-    (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt));
+    (await fetchKlineFrom("push2his.eastmoney.com", secid, klt, lmt, beg)) ??
+    (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt, beg));
   if (candles && candles.length > 0) return remember(cacheKey, candles);
   return recall<KlineCandle[]>(cacheKey, STALE_HISTORY_MS) ?? [];
 }
@@ -636,11 +638,15 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth | null> {
 /** 组装活跃市值板块数据：两市（沪指+深成指）成交额合计作活跃资金，沪指做参考指数与剔除口径。
  *  /api/amv 与 /market 入口卡（AmvStrip）共用，保证两处数值口径一致。上游不足返回 null。 */
 export async function buildAmvBoard(): Promise<AmvBoard | null> {
-  // lmt 传 800：东财 kline 在 beg=0 时实际忽略 lmt 返回全量历史（实测），此处显式给足以防上游某日改为遵守 lmt
-  // 时周/月视图缺数据（AMV_BOARD_HISTORY=750 需 ~760 根日 K）
+  // 起始日＝北京今天 − 1250 自然日（≈850 交易日）：够 AMV_BOARD_HISTORY=750 + 滚动窗 10，
+  // 且上游只回几十 KB——beg=0 全量 ~880KB 在 3s 超时内常传不完，深市 kline 在线上因此从未成功过
+  // （实测 prod candle:[] 而沪市靠早先缓存存活），板块被迫长期 sh-only 甚至整体 503。
+  const bj = new Date(Date.now() + 8 * 3600000 - 1250 * 86400000);
+  const beg = `${bj.getUTCFullYear()}${pad2(bj.getUTCMonth() + 1)}${pad2(bj.getUTCDate())}`;
+  // lmt 1200 > 可能返回的 ~850 根：无论上游把 lmt 当头部还是尾部截断都不会误删数据
   const [sh, sz, breadth] = await Promise.all([
-    fetchKline("1.000001", 101, 800),
-    fetchKline("0.399001", 101, 800),
+    fetchKline("1.000001", 101, 1200, beg),
+    fetchKline("0.399001", 101, 1200, beg),
     fetchMarketBreadth(),
   ]);
   if (sh.length === 0) return null; // 沪指历史都拿不到则整体失败
