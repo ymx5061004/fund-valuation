@@ -604,10 +604,16 @@ async function fetchKlineFrom(host: string, secid: string, klt: number, lmt: num
  *  全量包在 3s 超时内经常传不完（实测线上深市 kline 因此从未成功过），有界区间只有几十 KB。 */
 export async function fetchKline(secid: string, klt: number, lmt = 120, beg: number | string = 0): Promise<KlineCandle[]> {
   const cacheKey = `kline:${secid}:${klt}:${beg}`; // beg 参与 key：有界与全量是不同数据集，旧值兜底不能互相污染
+  // 失败负缓存 90s：双 host 全挂时短时间内不再打上游——防止「失败→无缓存→下个请求继续锤→持续被限流」
+  // 的雪崩回路（客户端 30s/60s 轮询 + 多访客叠加时尤甚）；90s 后自动恢复尝试
+  if (recall<boolean>(`kline-neg:${cacheKey}`, 90_000)) {
+    return recall<KlineCandle[]>(cacheKey, STALE_HISTORY_MS) ?? [];
+  }
   const candles =
     (await fetchKlineFrom("push2his.eastmoney.com", secid, klt, lmt, beg)) ??
     (await fetchKlineFrom("push2.eastmoney.com", secid, klt, lmt, beg));
   if (candles && candles.length > 0) return remember(cacheKey, candles);
+  remember(`kline-neg:${cacheKey}`, true);
   return recall<KlineCandle[]>(cacheKey, STALE_HISTORY_MS) ?? [];
 }
 
